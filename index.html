@@ -193,6 +193,13 @@ input.camno{margin-top:6px;min-height:38px;font-size:14px;padding:6px 9px}
 .rvf label.f{color:#8A4B00}
 .rvro{background:#FFF8EF;border-radius:8px;padding:6px 9px;margin-top:6px;font-size:13px}
 #pane.locked .rvf{pointer-events:auto;opacity:1}
+/* in-app camera */
+.cam{position:fixed;inset:0;background:#000;z-index:120;display:flex;flex-direction:column}
+.cam video{flex:1;width:100%;height:100%;object-fit:cover;background:#000}
+.cam .cbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px calc(18px + env(safe-area-inset-bottom));background:#0E2233}
+.cam .cbar .btn{min-width:110px}
+.cam .shutter{width:74px;height:74px;border-radius:50%;border:5px solid #fff;background:radial-gradient(circle,#fff 0 56%,transparent 58%);box-shadow:0 0 0 3px rgba(240,90,40,.7)}
+.cam.flash video{opacity:.35;transition:opacity .08s}
 </style></head>
 <body>
 <header class="top"><button id="back" class="hide">‹ Home</button><h1 id="title">MF-DPC-132 Field App</h1></header>
@@ -463,6 +470,45 @@ window.MF_ASSETS={};
       const sym = desc(sdt, NS.w, "sym")[0];
       if (sym) sym.setAttributeNS(NS.w, "w:char", on ? "2612" : "2610");
     }
+    /** Insert a child in its schema position (Word refuses some files with children out of order). */
+    _put(parent, el, order) {
+      const name = el.localName, i = order.indexOf(name);
+      kids(parent, NS.w, name).forEach((x) => parent.removeChild(x));
+      const after = Array.from(parent.childNodes).find((n) => n.nodeType === 1 && order.indexOf(n.localName) > i);
+      parent.insertBefore(el, after || null);
+    }
+    /** Colour the text of a cell (bold) and/or shade it; fill "" clears the shade. */
+    paint(tc, color, fill) {
+      const RPR = ["rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps", "smallCaps", "strike", "dstrike", "outline", "shadow", "emboss", "imprint", "noProof", "snapToGrid", "vanish", "webHidden", "color", "spacing", "w", "kern", "position", "sz", "szCs", "highlight", "u", "effect", "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout", "specVanish", "oMath"];
+      const TCPR = ["cnfStyle", "tcW", "gridSpan", "hMerge", "vMerge", "tcBorders", "shd", "noWrap", "tcMar", "textDirection", "tcFitText", "vAlign", "hideMark"];
+      if (color) for (const r of desc(tc, NS.w, "r")) {
+        let rp = kids(r, NS.w, "rPr")[0]; if (!rp) { rp = this.doc.createElementNS(NS.w, "w:rPr"); r.insertBefore(rp, r.firstChild); }
+        this._put(rp, this.doc.createElementNS(NS.w, "w:b"), RPR);
+        const c = this.doc.createElementNS(NS.w, "w:color"); c.setAttributeNS(NS.w, "w:val", color); this._put(rp, c, RPR);
+      }
+      if (fill !== undefined) {
+        let pr = kids(tc, NS.w, "tcPr")[0]; if (!pr) { pr = this.doc.createElementNS(NS.w, "w:tcPr"); tc.insertBefore(pr, tc.firstChild); }
+        kids(pr, NS.w, "shd").forEach((x) => pr.removeChild(x));
+        if (fill) { const sh = this.doc.createElementNS(NS.w, "w:shd"); sh.setAttributeNS(NS.w, "w:val", "clear"); sh.setAttributeNS(NS.w, "w:color", "auto"); sh.setAttributeNS(NS.w, "w:fill", fill); this._put(pr, sh, TCPR); }
+      }
+    }
+    /** Result box: ✔ green for Y, ✘ red for N, ✔ grey for NA, ✔ amber for NV; the box stays a Word checkbox. */
+    tickMark(tc, on, k) {
+      const b = this.checkboxes(tc)[0]; if (!b) return;
+      const M = { Y: ["2714", "1E8E3E"], N: ["2718", "C62828"], NA: ["2714", "6D7B83"], NV: ["2714", "9A6B00"] }[k] || ["2714", "1E8E3E"];
+      const cs = desc(b, NS.w14, "checkedState")[0]; if (cs) { cs.setAttributeNS(NS.w14, "w14:val", M[0]); cs.setAttributeNS(NS.w14, "w14:font", "Segoe UI Symbol"); }
+      const us = desc(b, NS.w14, "uncheckedState")[0]; if (us) us.setAttributeNS(NS.w14, "w14:font", "Segoe UI Symbol");
+      this.setBox(b, on);
+      const sym = desc(b, NS.w, "sym")[0]; if (sym) { sym.setAttributeNS(NS.w, "w:char", on ? M[0] : "2610"); sym.setAttributeNS(NS.w, "w:font", "Segoe UI Symbol"); }
+      if (on) this.paint(b, M[1]);
+    }
+    /** ✓ / ✗ / NA / NV text in leg, phase and position cells. */
+    markText(tc, v) { const c = { "✓": "1E8E3E", "✗": "C62828", NA: "6D7B83", NV: "9A6B00" }[v]; if (c) this.paint(tc, c); }
+    /** Severity cell: 1 yellow, 2 orange, 3 red. */
+    sevCell(tc, sev) {
+      const F = { 1: ["F5C518", "000000"], 2: ["F08A00", "FFFFFF"], 3: ["D32F2F", "FFFFFF"] }[+sev];
+      if (F && sev !== "" && sev != null) this.paint(tc, F[1], F[0]);
+    }
     checkboxes(tc) {
       return desc(tc, NS.w, "sdt").filter((s) => desc(s, NS.w14, "checkbox").length);
     }
@@ -594,8 +640,8 @@ window.MF_ASSETS={};
     (pkg.defects || []).forEach((x) => { (defectsByPoint[x.point] = defectsByPoint[x.point] || []).push(x); });
     for (const it of def.items) {
       const e = (pkg.items || {})[it.id] || {};
-      ["Y", "N", "NA", "NV"].forEach((k) => { if (it.col[k] != null) d.tick(d.tc(it.t, it.r, it.col[k]), e.r === k); });
-      if (it.col.Sev != null) d.setText(d.tc(it.t, it.r, it.col.Sev), e.sev === 0 || e.sev ? String(e.sev) : "");
+      ["Y", "N", "NA", "NV"].forEach((k) => { if (it.col[k] != null) d.tickMark(d.tc(it.t, it.r, it.col[k]), e.r === k, k); });
+      if (it.col.Sev != null) { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
       const dfs = (defectsByPoint[it.id] || []).filter((x) => !x.pos);
       const ph = [].concat(...dfs.map(photoRefs));
       if (it.col.Photo != null && ph.length) d.setText(d.tc(it.t, it.r, it.col.Photo), [it.photo, ...ph].filter(Boolean).join(" "));
@@ -604,13 +650,13 @@ window.MF_ASSETS={};
     }
     for (const it of def.legs) {
       const e = (pkg.legs || {})[it.id] || {};
-      LEGS.forEach((l) => d.setText(d.tc(it.t, it.r, it.col["Leg " + l]), e[l] || ""));
-      d.setText(d.tc(it.t, it.r, it.col.Sev), e.sev === 0 || e.sev ? String(e.sev) : "");
+      LEGS.forEach((l) => { const c = d.tc(it.t, it.r, it.col["Leg " + l]); d.setText(c, e[l] || ""); d.markText(c, e[l]); });
+      { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
     }
     for (const it of def.phases) {
       const e = (pkg.phases || {})[it.id] || {};
-      PHASES.forEach((p) => d.setText(d.tc(it.t, it.r, it.col[p]), e[p] || ""));
-      d.setText(d.tc(it.t, it.r, it.col.Sev), e.sev === 0 || e.sev ? String(e.sev) : "");
+      PHASES.forEach((p) => { const c = d.tc(it.t, it.r, it.col[p]); d.setText(c, e[p] || ""); d.markText(c, e[p]); });
+      { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
     }
     const posLines = (kind) => (pkg.defects || []).filter((x) => x.pos && (kind === "leg" ? /^Leg /.test(x.pos) : !/^Leg /.test(x.pos) && !/^Lead /.test(x.pos)))
       .map((x) => x.pos + "  " + x.point + " – " + (x.desc || x.component) + (photoRefs(x).length ? " (" + photoRefs(x).join(", ") + ")" : ""));
@@ -1659,8 +1705,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     // position tables
     def.positions.forEach((it) => {
       const e = (pkg.pos || {})[it.id] || {};
-      it.posLabels.forEach((l) => d.setText(d.tc(it.t, it.r, it.col[l]), e[l] || ""));
-      if (it.col.Sev != null) d.setText(d.tc(it.t, it.r, it.col.Sev), e.sev === 0 || e.sev ? String(e.sev) : "");
+      it.posLabels.forEach((l) => { const c = d.tc(it.t, it.r, it.col[l]); d.setText(c, e[l] || ""); d.markText(c, e[l]); });
+      if (it.col.Sev != null) { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
     });
     // reading grids
     def.grids.forEach((g, gi) => {
@@ -1671,7 +1717,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         row.empty.forEach((c) => {
           let v = e[c];
           if (c === g.sevCol && (v === undefined || v === "")) { const s = gridRowSev(g, row, e); v = s === "" || s == null ? "" : String(s); }
-          if (v !== undefined) d.setText(d.tc(g.t, row.r, c), colType(g.cols[c]) === "date" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? Core.fmtDate(v) : String(v));
+          if (v !== undefined) { const gc = d.tc(g.t, row.r, c); d.setText(gc, colType(g.cols[c]) === "date" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? Core.fmtDate(v) : String(v)); if (c === g.sevCol) d.sevCell(gc, v); else d.markText(gc, v); }
         });
       });
     });
@@ -2063,7 +2109,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.2.0";
+  const APP_VERSION = "1.3.0";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const today = () => new Date().toISOString().slice(0, 10);
@@ -2297,7 +2343,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
 
   async function home() {
     if (!me || locked) return lock();
-    view = "home"; cur = null; updateWho(); document.body.classList.remove("landing"); setGear(); clearInterval(nextTimer);
+    view = "home"; cur = null; updateWho(); document.body.classList.remove("landing"); setGear(); clearInterval(nextTimer); dbDel("kv", "resume").catch(() => {});
     const all = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
     $("#title").textContent = "Round " + settings.round;
     $("#back").classList.add("hide");
@@ -2430,7 +2476,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     });
   }
 
-  function renderInsp() {
+  const keepPlace = () => { if (cur) dbPut("kv", { id: cur.id, tab: curTab, at: Date.now() }, "resume").catch(() => {}); };
+  function renderInsp() { keepPlace();
     const def = DEFS[cur.form], tw = TW[cur.structure];
     $("#title").innerHTML = esc(cur.structure) + " · " + esc(Core.formCode(cur.form)) + ` <span class="sub">${esc(tw.type)} · ${esc(cur.round)}</span>`;
     const tabs = tabsFor(def);
@@ -2542,12 +2589,12 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const have = ids.filter((id) => cur.photos[id]).length;
     pane.insertAdjacentHTML("beforeend", `<div class="card" id="secph"><h2>📷 Photos for this section <span class="muted">(${have}/${ids.length})</span></h2>
       <div class="photos">${ids.map((id) => `<div class="ph ${cur.photos[id] ? "have" : ""}"><div class="img" id="sim_${id}">📷</div><div class="cap"><b>${id}</b> – ${esc(cap(id))} ${cur.photos[id] ? '<span class="pill ok">taken</span>' : ""}</div>
-        <div class="act"><button class="btn sm pri" data-stake="${id}">${cur.photos[id] ? "Retake" : "Take"}</button></div>${camInput(id)}</div>`).join("")}</div></div>`);
+        <div class="act"><button class="btn sm pri" data-stake="${id}">${cur.photos[id] ? "Retake" : "Take"}</button><button class="btn sm" data-stake="${id}" data-src="gallery">Gallery</button></div>${camInput(id)}</div>`).join("")}</div></div>`);
     for (const id of ids) { if (cur.photos[id]) { const u = await thumb(id); const el = $("#sim_" + id); if (u && el) { el.style.backgroundImage = `url(${u})`; el.textContent = ""; } else if (el && cur.photos[id].camera) { el.textContent = "📷 " + cur.photos[id].camera; el.classList.add("cam"); } else if (el) el.textContent = "☁️"; } }
     bindCam(pane.querySelector("#secph"), def, () => { const y = window.scrollY; refreshTabs(); window.scrollTo(0, y); });
     pane.querySelectorAll("[data-stake]").forEach((b) => (b.onclick = async () => {
       if (cur.status === "complete" || cur.heldBy) return save();
-      const id = b.dataset.stake; if (await capture(id, cap(id))) { toast(id + " saved"); const y = window.scrollY; refreshTabs(); window.scrollTo(0, y); }
+      const id = b.dataset.stake; if (await capture(id, cap(id), b.dataset.src)) { toast(id + " saved"); const y = window.scrollY; refreshTabs(); window.scrollTo(0, y); }
     }));
   }
   /** Leave the record: it is already saved on the phone and sent when there is signal. */
@@ -2682,12 +2729,39 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /* ------------------------------ photos ------------------------------ */
   // PRO-401 section 7: the camera original is kept unedited (EXIF date, time, GPS). The phone stores and
   // uploads the original file as it is; the stamped working copy is made by the laptop engine.
-  function pickImage() {
+  function pickImage(camera) {
     return new Promise((res) => {
       const inp = document.createElement("input");
-      inp.type = "file"; inp.accept = "image/*"; inp.capture = "environment";
-      inp.onchange = () => res(inp.files[0] || null);
+      inp.type = "file"; inp.accept = "image/*"; if (camera) inp.capture = "environment";
+      inp.style.cssText = "position:fixed;left:-9999px;opacity:0"; document.body.appendChild(inp);
+      let done = false; const fin = (f) => { if (done) return; done = true; setTimeout(() => inp.remove(), 1000); res(f); };
+      inp.onchange = () => fin(inp.files[0] || null);
+      inp.addEventListener("cancel", () => fin(null));
       inp.click();
+    });
+  }
+  /** Camera inside the app: the phone never leaves the page, so Android cannot close it while a photo is taken. */
+  function inAppCamera() {
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return pickImage(true);
+    return new Promise((res) => {
+      const sh = document.createElement("div"); sh.className = "cam";
+      sh.innerHTML = `<video playsinline autoplay muted></video><div class="cbar"><button class="btn ghost" data-x="1">Cancel</button><button class="shutter" aria-label="Take photo"></button><button class="btn ghost" data-alt="1">Phone camera</button></div>`;
+      document.body.appendChild(sh);
+      let stream = null, over = false;
+      const stop = () => { try { stream && stream.getTracks().forEach((t) => t.stop()); } catch (e) {} };
+      const done = (f) => { if (over) return; over = true; stop(); sh.remove(); res(f); };
+      sh.querySelector("[data-x]").onclick = () => done(null);
+      sh.querySelector("[data-alt]").onclick = () => { const pr = pickImage(true); over = true; stop(); sh.remove(); pr.then(res); };
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 4032 }, height: { ideal: 3024 } }, audio: false })
+        .then((st) => { stream = st; if (over) return stop(); sh.querySelector("video").srcObject = st; })
+        .catch(() => { toast("Camera blocked – use Phone camera, or allow the camera for this app"); });
+      sh.querySelector(".shutter").onclick = async () => {
+        if (!stream) return; const v = sh.querySelector("video"), track = stream.getVideoTracks()[0]; let blob = null;
+        sh.classList.add("flash");
+        try { if (window.ImageCapture) blob = await new ImageCapture(track).takePhoto(); } catch (e) { blob = null; }
+        if (!blob) { const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext("2d").drawImage(v, 0, 0); blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.92)); }
+        done(blob ? new File([blob], "IMG_" + Date.now() + ".jpg", { type: "image/jpeg", lastModified: Date.now() }) : null);
+      };
     });
   }
   async function makeThumb(file) {
@@ -2699,9 +2773,10 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const thumb = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.7));
     return { thumb, w: bmp.width, h: bmp.height };
   }
-  async function capture(slot, caption) {
+  async function capture(slot, caption, src) {
     if (cur.status === "complete") { toast("Completed – reopen it to change anything"); return false; }
-    const file = await pickImage(); if (!file) return false;
+    if (cur.heldBy) { toast("Continued by another team member – this copy is read-only"); return false; }
+    const file = await (src === "gallery" ? pickImage(false) : inAppCamera()); if (!file) return false;
     const when = new Date();
     const buf = await file.arrayBuffer(), sha = await T.sha256(buf);
     // the same picture cannot stand for two photo slots
@@ -2772,17 +2847,17 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   function nextSlot(prefix) { let n = 1; while (cur.photos[prefix + String(n).padStart(2, "0")]) n++; return prefix + String(n).padStart(2, "0"); }
   /** which = "photo" (close-up) or "photo2" (context, Sev 2 / 3). */
-  async function takeDefectPhoto(key, which, done) {
+  async function takeDefectPhoto(key, which, done, src) {
     Core.syncDefects(cur, DEFS[cur.form]);
     const d = cur.defects.find((x) => x.key === key); if (!d) return;
     const slot = d[which] || nextSlot("D");
     const cap = "Defect " + d.point + (d.pos ? " " + d.pos : "") + (which === "photo2" ? " context" : " close-up") + " – " + (d.desc || d.component);
-    if (await capture(slot, cap)) {
+    if (await capture(slot, cap, src)) {
       const d2 = cur.defects.find((x) => x.key === key) || d; // syncDefects rebuilds the list
       d2[which] = slot; cur.photos[slot].caption = cap; await dbPut("insp", cur); toast(slot + " saved"); done && done();
     }
   }
-  async function thumb(slot) { const r = await dbGet("photos", cur.id + "/" + slot); return r ? URL.createObjectURL(r.thumb || r.orig || r.blob) : null; }
+  async function thumb(slot) { try { const r = await dbGet("photos", cur.id + "/" + slot), b = r && (r.thumb || r.orig || r.blob); return b ? URL.createObjectURL(b) : null; } catch (e) { return null; } }
 
   async function panePhotos(pane, def) {
     const live = (cur.live || {}).done === "Yes";
@@ -2792,7 +2867,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     for (const k of Object.keys(cur.photos)) { const r = await dbGet("photos", cur.id + "/" + k); up[k] = r ? r.uploaded : true; }
     const card = (id, cap, req) => `<div class="ph ${cur.photos[id] ? "have" : ""}" data-slot="${id}"><div class="img" id="im_${id}">📷</div>
       <div class="cap"><b>${id}</b> – ${esc(cap)} ${req ? "" : '<span class="muted">(defect / extra)</span>'} ${cur.photos[id] ? (up[id] ? '<span class="pill ok">sent</span>' : '<span class="pill">waiting</span>') : ""}</div>
-      <div class="act"><button class="btn sm pri" data-take="${id}">${cur.photos[id] ? "Retake" : "Take"}</button>${cur.photos[id] ? `<button class="btn sm warn" data-del="${id}">Delete</button>` : ""}</div>${camInput(id)}</div>`;
+      <div class="act"><button class="btn sm pri" data-take="${id}">${cur.photos[id] ? "Retake" : "Take"}</button><button class="btn sm" data-take="${id}" data-src="gallery">Gallery</button>${cur.photos[id] ? `<button class="btn sm warn" data-del="${id}">Delete</button>` : ""}</div>${camInput(id)}</div>`;
     pane.innerHTML = `<div class="card"><h2>Photo record</h2>
       <div class="photos">${slots.map((p) => card(p.id, p.caption, true)).join("")}${extra.map((k) => card(k, (cur.photos[k] || {}).caption || "Additional photo", false)).join("")}</div>${!slots.length && !extra.length ? '<div class="empty">No fixed photo slots.</div>' : ""}
       <div class="row" style="margin-top:12px"><button class="btn" id="addx">+ Additional photo</button></div></div>`;
@@ -2800,7 +2875,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     bindCam(pane, def, () => panePhotos(pane, def));
     pane.querySelectorAll("[data-take]").forEach((b) => (b.onclick = async () => {
       const id = b.dataset.take, p = def.photos.find((x) => x.id === id);
-      if (await capture(id, p ? p.caption : (cur.photos[id] || {}).caption)) { toast(id + " saved"); refreshTabs(); }
+      if (await capture(id, p ? p.caption : (cur.photos[id] || {}).caption, b.dataset.src)) { toast(id + " saved"); refreshTabs(); }
     }));
     pane.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
       const id = b.dataset.del; if (!confirm("Delete photo " + id + "?")) return;
@@ -2818,8 +2893,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       ${structural ? `<div class="row"><div style="width:96px"><label class="f">Face</label><select data-dkey="${esc(d.key)}" data-df="face"><option></option>${["A", "B", "C", "D", "A-B", "B-C", "C-D", "D-A"].map((f) => `<option ${d.face === f ? "selected" : ""}>${f}</option>`).join("")}</select></div>
         <div class="grow"><label class="f">Panel</label><input type="text" data-dkey="${esc(d.key)}" data-df="panel" value="${esc(d.panel || "")}"></div>
         <div class="grow"><label class="f">Member mark</label><input type="text" data-dkey="${esc(d.key)}" data-df="member" value="${esc(d.member || "")}"></div></div>` : ""}
-      <div class="row" style="margin-top:8px"><button class="btn sm" data-dphoto="${esc(d.key)}" data-which="photo">📷 Close-up ${esc(d.photo || "")}</button><input class="camno" style="width:130px;margin:0" data-dcam="${esc(d.key)}" data-which="photo" placeholder="Camera No." value="${esc((cur.photos[d.photo] || {}).camera || "")}">
-      ${need2 ? `<button class="btn sm" data-dphoto="${esc(d.key)}" data-which="photo2">📷 Context ${esc(d.photo2 || "")}</button><input class="camno" style="width:130px;margin:0" data-dcam="${esc(d.key)}" data-which="photo2" placeholder="Camera No." value="${esc((cur.photos[d.photo2] || {}).camera || "")}">` : ""}
+      <div class="row" style="margin-top:8px"><button class="btn sm" data-dphoto="${esc(d.key)}" data-which="photo">📷 Close-up ${esc(d.photo || "")}</button><button class="btn sm" data-dphoto="${esc(d.key)}" data-which="photo" data-src="gallery" title="From gallery">🖼</button><input class="camno" style="width:130px;margin:0" data-dcam="${esc(d.key)}" data-which="photo" placeholder="Camera No." value="${esc((cur.photos[d.photo] || {}).camera || "")}">
+      ${need2 ? `<button class="btn sm" data-dphoto="${esc(d.key)}" data-which="photo2">📷 Context ${esc(d.photo2 || "")}</button><button class="btn sm" data-dphoto="${esc(d.key)}" data-which="photo2" data-src="gallery" title="From gallery">🖼</button><input class="camno" style="width:130px;margin:0" data-dcam="${esc(d.key)}" data-which="photo2" placeholder="Camera No." value="${esc((cur.photos[d.photo2] || {}).camera || "")}">` : ""}
       ${(!d.photo && !d.auto) || (need2 && !d.photo2 && !d.auto) ? '<span class="muted" style="color:#c62828">photo needed</span>' : ""}</div>
       ${isLead() ? `<div class="rvf"><label class="f">Recommendation to DPC</label><input type="text" data-dkey="${esc(d.key)}" data-df="rec" data-rv="1" value="${esc(d.rec || "")}"><label class="f">Review note</label><input type="text" data-dkey="${esc(d.key)}" data-df="note" data-rv="1" value="${esc(d.note || "")}"></div>`
         : d.note ? `<div class="rvro"><b>Review note:</b> ${esc(d.note)}</div>` : ""}`;
@@ -2829,7 +2904,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       const h = () => { const d = cur.defects.find((x) => x.key === el.dataset.dkey); if (!d) return; d[el.dataset.df || "desc"] = el.value; el.dataset.rv ? reviewDirty() : markDirty(); };
       el.oninput = h; el.onchange = h;
     });
-    scope.querySelectorAll("[data-dphoto]").forEach((b) => (b.onclick = () => takeDefectPhoto(b.dataset.dphoto, b.dataset.which || "photo", redraw)));
+    scope.querySelectorAll("[data-dphoto]").forEach((b) => (b.onclick = () => takeDefectPhoto(b.dataset.dphoto, b.dataset.which || "photo", redraw, b.dataset.src)));
     scope.querySelectorAll("[data-dcam]").forEach((el) => (el.onchange = () => {
       Core.syncDefects(cur, DEFS[cur.form]); const d = cur.defects.find((x) => x.key === el.dataset.dcam); if (!d) return;
       const w = el.dataset.which, slot = d[w] || nextSlot("D"), cap = "Defect " + d.point + (d.pos ? " " + d.pos : "") + (w === "photo2" ? " context" : " close-up") + " – " + (d.desc || d.component);
@@ -2947,7 +3022,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const g = def.grids[gi], G = cur.grid[gi] || {};
     return g.rows.every((row) => row.free || row.empty.every((c) => { const t = Core.Forms.colType(g.cols[c]); return !(t === "mark" || t === "method" || /^Reading/.test(g.cols[c])) || (G[row.r] || {})[c]; }));
   }
-  function renderGen() {
+  function renderGen() { keepPlace();
     const def = DEFS[cur.form], tw = structOf(cur.form, cur.structure) || { id: cur.structure, type: Core.formCode(cur.form), typeText: cur.structure };
     cur.hin = cur.hin || {}; cur.pos = cur.pos || {}; cur.grid = cur.grid || {};
     $("#title").innerHTML = esc(cur.structure) + " · " + esc(Core.formCode(cur.form)) + ` <span class="sub">${esc(cur.round)}</span>`;
@@ -3505,7 +3580,9 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         $("#pin").value = ""; return toast("Wrong PIN – " + (5 - p.fails) + " tries left");
       }
       p.fails = 0; me = p; locked = false; await savePeople(); await dbPut("kv", me.id, "session");
-      document.body.classList.remove("landing"); updateWho(); touch(); home(); syncNow(false);
+      document.body.classList.remove("landing"); updateWho(); touch(); syncNow(false);
+      const rs = await dbGet("kv", "resume").catch(() => null), rec = rs && Date.now() - rs.at < 4 * 3600e3 ? await dbGet("insp", rs.id) : null;
+      if (rec && !rec.heldBy) { await openInsp(rec.id); if (rs.tab) { curTab = rs.tab; isLog(cur.form) ? renderLog() : isGen(cur.form) ? renderGen() : renderInsp(); } } else home();
     };
     $("#unlock").onclick = go; $("#pin").onkeydown = (e) => { if (e.key === "Enter") go(); };
   }
