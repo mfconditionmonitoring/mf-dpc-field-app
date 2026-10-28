@@ -1,5 +1,5 @@
 // Offline cache for the MF-DPC-132 Field App
-const CACHE = "mf-dpc-132-0a3d21da5c";
+const CACHE = "mf-dpc-132-7c91f38f3b";
 const FILES = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
