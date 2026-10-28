@@ -101,6 +101,16 @@ table.log td,table.log th{border-bottom:1px solid var(--line);padding:5px;text-a
 #pane.locked{pointer-events:none;opacity:.78}
 .it.sel{outline:2px solid var(--navy)}
 .hide{display:none!important}
+
+.legend{font-size:13px;margin:4px 0 10px;line-height:1.35}
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.38);display:flex;align-items:flex-end;z-index:98}
+.sheet-in{background:#fff;width:100%;padding:16px 14px calc(16px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;box-shadow:0 -4px 18px rgba(0,0,0,.25)}
+.sheet-t{font-weight:700;margin-bottom:6px;color:var(--navy)}
+.sheet .seg button{min-height:56px;font-size:16px}
+.sheet .seg button.ok{border-color:var(--ok);color:var(--ok)}.sheet .seg button.bad{border-color:var(--bad);color:var(--bad)}
+.sheet .seg button.on.ok{background:var(--ok);color:#fff}.sheet .seg button.on.bad{background:var(--bad);color:#fff}
+.sheet .seg button.on.NA{background:var(--na);color:#fff}.sheet .seg button.on.NV{background:var(--nv);color:#fff}
+.cr b{color:var(--navy)}
 </style></head>
 <body>
 <header class="top"><button id="back" class="hide">‹ Home</button><h1 id="title">MF-DPC-132 Field App</h1></header>
@@ -1970,7 +1980,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.0.0";
+  const APP_VERSION = "1.1.0";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const today = () => new Date().toISOString().slice(0, 10);
@@ -2136,6 +2146,64 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   let cur = null, curTab = "hdr", view = "home";
   const app = () => $("#app");
 
+  /* ------------------------------ team status: who holds which tower ------------------------------ */
+  let teamStatus = { round: "", at: "", list: {} };
+  const signer = () => (me && me.secret ? me : Object.values(people).find((x) => x.secret) || null);
+  const nameOfId = (id) => ((((config && config.team) || []).find((x) => x.id === id) || {}).name || (people[id] || {}).name || id || "");
+  const hm = (iso) => { if (!iso) return ""; const d = new Date(iso); return d.toISOString().slice(0, 10) === today() ? d.toTimeString().slice(0, 5) : d.toISOString().slice(0, 10) + " " + d.toTimeString().slice(0, 5); };
+  function statusFor(structure, form) { const e = (teamStatus.list || {})[structure + "_" + Core.formCode(form)]; return teamStatus.round === settings.round ? e || null : null; }
+  function statusText(st) {
+    if (!st) return "";
+    if (st.status === "complete") return "✅ Completed by " + (st.holderName || nameOfId(st.completedBy || st.holder)) + " · " + hm(st.completed || st.updated);
+    return "🟠 In progress by " + (st.holderName || nameOfId(st.holder)) + " · last change " + hm(st.updated);
+  }
+  async function loadTeamStatus() {
+    if (!teamStatus.round) teamStatus = (await dbGet("kv", "teamStatus")) || teamStatus;
+    const u = signer(); if (!settings.endpoint || !u || !navigator.onLine) return false;
+    try {
+      const r = await fetch(settings.endpoint + (settings.endpoint.includes("?") ? "&" : "?") + "action=status&round=" + encodeURIComponent(settings.round) + "&user=" + encodeURIComponent(u.id) + "&auth=" + encodeURIComponent(u.secret));
+      const j = await r.json(); if (!j.ok || !j.status) return false;
+      teamStatus = { round: settings.round, at: new Date().toISOString(), list: j.status }; await dbPut("kv", teamStatus, "teamStatus"); return true;
+    } catch (e) { return false; }
+  }
+  /** Continue a record started by someone else (or by you on another phone): download it and become its holder. */
+  async function takeOver(st, why) {
+    const u = signer(); if (!u || !navigator.onLine) { toast("Needs signal to take over a record."); return null; }
+    const folder = st.structure + "_" + Core.formCode(st.form);
+    let j; try { j = await post({ action: "takeover", user: u.id, auth: u.secret, round: settings.round, folder, reason: why || "", device: settings.device || "" }); }
+    catch (e) { alert("Could not take over " + folder + ":\n" + e.message); return null; }
+    const p = j.pkg; delete p.received; delete p.heldBy;
+    const now = new Date().toISOString();
+    p.takenOver = (p.takenOver || []).concat([{ by: u.id, from: st.holder, at: now, why: why || "" }]);
+    for (const slot of Object.keys(p.photos || {})) { const k = p.id + "/" + slot; if (!(await dbGet("photos", k))) await dbPut("photos", { uploaded: now, cloud: true }, k); }
+    T.note(p, whoAmI(), "status", "takeover", "continued from " + (st.holderName || st.holder));
+    p.lastUser = me.id; p.rev = (p.rev || 0) + 1; p.sentRev = 0; p.updated = now;
+    await dbPut("insp", p);
+    toast(folder + " downloaded – you can continue it now");
+    syncNow(false);
+    return p;
+  }
+
+  /** Before starting a new record: is this tower already started or finished by someone? Returns "stop", a record to open, or null to start new. */
+  async function teamGate(id, form, all) {
+    const fresh = await loadTeamStatus();
+    const st = statusFor(id, form), code = Core.formCode(form);
+    if (!st) {
+      if (!fresh && !confirm("No signal – cannot check whether a team member has already started " + id + " " + code + ".\n\nStart it anyway?")) return "stop";
+      return null;
+    }
+    if (all.some((p) => p.id === st.pkgId)) return null;
+    const who = st.holderName || nameOfId(st.holder);
+    if (st.status === "complete") {
+      if (!(me.role === "lead" || me.role === "engineer")) { alert(id + " " + code + " was already completed by " + who + " (" + hm(st.completed || st.updated) + ").\n\nIt cannot be started again. If it must be corrected, ask the team leader or the E&I Engineer."); return "stop"; }
+      const r = prompt(id + " " + code + " was completed by " + who + ". Download it to this phone to correct it?\nGive the reason (kept in the record), or Cancel:"); if (!r || !r.trim()) return "stop";
+      return (await takeOver(st, r.trim())) || "stop";
+    }
+    if (st.holder === me.id) { if (!confirm("You already started " + id + " " + code + " on another phone (last change " + hm(st.updated) + ").\n\nDownload it here and continue?")) return "stop"; return (await takeOver(st, "same person, other phone")) || "stop"; }
+    if (!confirm(id + " " + code + " is already being inspected by " + who + " (last change " + hm(st.updated) + ").\n\nOK = continue " + who.split(" ")[0] + "'s inspection on this phone – their copy becomes read-only\nCancel = do not start")) return "stop";
+    return (await takeOver(st, "continued from " + who)) || "stop";
+  }
+
   async function home() {
     if (!me || locked) return signInView();
     view = "home"; cur = null; updateWho();
@@ -2147,7 +2215,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       const total = def ? (def.items.length + def.legs.length + def.phases.length + (def.positions || []).length + (def.grids || []).reduce((a, g) => a + g.rows.filter((r) => !r.free).length, 0)) || 1 : 1;
       const pct = Math.round(100 * ev.counts.checked / total);
       const sev = ev.highest ? `<span class="pill s${ev.highest}">Sev ${ev.highest}</span>` : "";
-      return `<div class="it" data-open="${esc(p.id)}"><div class="t">${esc(p.structure)}</div><div class="grow"><div><b>${esc(Core.formCode(p.form))}</b> <span class="muted">${esc(p.header.date || "")}</span> ${sev} ${p.status === "complete" ? '<span class="pill ok">Complete</span>' : ""} ${reviewPill(p)}</div>
+      return `<div class="it" data-open="${esc(p.id)}"><div class="t">${esc(p.structure)}</div><div class="grow"><div><b>${esc(Core.formCode(p.form))}</b> <span class="muted">${esc(p.header.date || "")}</span> ${sev} ${p.status === "complete" ? '<span class="pill ok">Complete</span>' : '<span class="pill">In progress</span>'} ${p.heldBy ? '<span class="pill s2">Continued by another member</span>' : ""} ${reviewPill(p)}</div>
         <div class="muted">${def ? ev.counts.checked + "/" + total + " points" : esc(LOGF[p.form].title)} · ${ev.photos.length} photos · ${(p.defects || []).length} defects</div><div class="bar"><i style="width:${pct}%"></i></div></div></div>`;
     }).join("");
     app().innerHTML = `
@@ -2179,8 +2247,9 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     };
     $("#nt").oninput = () => {
       const f = $("#nf").value;
-      if (isAssetForm(f)) { const a = structOf(f, $("#nt").value.trim().toUpperCase()); $("#ntinfo").textContent = a ? a.typeText + (towerDist(a) != null ? " · " + towerDist(a) + " m away" : "") : ""; return; }
-      const t = TW[norm($("#nt").value)]; $("#ntinfo").textContent = t ? `${t.typeText} · ext ${t.ext} · chainage ${t.chainage} m${towerDist(t) != null ? " · " + towerDist(t) + " m away" : ""}` : ""; };
+      const stLine = (id) => { const st = statusFor(id, f); return st ? "<br><b>" + esc(statusText(st)) + "</b>" : ""; };
+      if (isAssetForm(f)) { const aid = $("#nt").value.trim().toUpperCase(), a = structOf(f, aid); $("#ntinfo").innerHTML = a ? esc(a.typeText + (towerDist(a) != null ? " · " + towerDist(a) + " m away" : "")) + stLine(aid) : ""; return; }
+      const tid = norm($("#nt").value), t = TW[tid]; $("#ntinfo").innerHTML = t ? esc(`${t.typeText} · ext ${t.ext} · chainage ${t.chainage} m${towerDist(t) != null ? " · " + towerDist(t) + " m away" : ""}`) + stLine(tid) : ""; };
     $("#near").onclick = () => {
       if (!fix) return toast("No GPS fix yet – wait a moment outdoors.");
       if (isAssetForm($("#nf").value)) { let b = null; assetList($("#nf").value).forEach((a) => { const d = towerDist(a); if (d != null && (b == null || d < b.d)) b = { a, d }; }); if (!b) return toast("No GPS position for these items."); $("#nt").value = b.a.id; $("#nt").oninput(); return toast("Nearest: " + b.a.id + " (" + b.d + " m)"); }
@@ -2192,6 +2261,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       if (isAssetForm(form)) {
         const aid = $("#nt").value.trim().toUpperCase(); if (!structOf(form, aid)) return toast("Pick an item from the list.");
         const dupA = all.find((p) => p.structure === aid && p.form === form && p.round === settings.round);
+        if (!dupA) { const g = await teamGate(aid, form, all); if (g === "stop") return; if (g) return openInsp(g.id); }
         if (dupA && confirm(aid + " " + Core.formCode(form) + " already exists for round " + settings.round + ". Open it instead?\n\nOK = open the existing one, Cancel = start a second copy")) return openInsp(dupA.id);
         const ra = startReason(form, aid); if (ra === null) return;
         const pa = stampNew(newGeneric(form, aid), ra); await dbPut("insp", pa); return openInsp(pa.id);
@@ -2199,6 +2269,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       const id = norm($("#nt").value), t = TW[id];
       if (!t || (t.group === "G" && !isLog(form))) return toast(isLog(form) ? "Enter T001 – T240, G-0 or G-RM." : "Enter a tower number T001 – T240.");
       const dup = all.find((p) => p.structure === id && p.form === form && p.round === settings.round);
+      if (!dup) { const g = await teamGate(id, form, all); if (g === "stop") return; if (g) return openInsp(g.id); }
       if (dup && !confirm(id + " " + Core.formCode(form) + " already exists for round " + settings.round + ". Open it instead?\n\nOK = open the existing one, Cancel = start a second copy")) { /* second copy */ }
       else if (dup) return openInsp(dup.id);
       const why = startReason(form, id); if (why === null) return;
@@ -2212,6 +2283,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     $("#set").onclick = settingsView;
     $("#lockH").onclick = () => lock();
     storeCard(all);
+    loadTeamStatus().then(() => { if (view === "home" && $("#nt")) $("#nt").oninput(); });
   }
   /** What is kept on the phone until there is signal, and how much room is left. */
   async function storeCard(all) {
@@ -2247,6 +2319,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   function tagged(tag, fn) { auditTag = tag; try { fn(); } finally { auditTag = ""; } }
   function save(force) {
     if (cur && cur.status === "complete" && force !== true) return toast("Completed – reopen it to change anything");
+    if (cur && cur.heldBy && force !== true) return toast("Continued by another team member – this copy is read-only");
     cur.updated = new Date().toISOString(); cur.rev = (cur.rev || 0) + 1; queueSync();
     if (isGen(cur.form)) genHeaderSync(cur);
     Core.syncDefects(cur, DEFS[cur.form]);
@@ -2296,7 +2369,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const idx = tabs.findIndex((t) => t[0] === curTab);
     $("#prev").onclick = () => { if (idx > 0) { curTab = tabs[idx - 1][0]; renderInsp(); window.scrollTo(0, 0); } };
     $("#next").onclick = () => { if (idx < tabs.length - 1) { curTab = tabs[idx + 1][0]; renderInsp(); window.scrollTo(0, 0); } };
-    if (idx === tabs.length - 1) $("#next").disabled = true;
+    if (idx === tabs.length - 1) { $("#next").textContent = "Save & close"; $("#next").onclick = saveClose; }
     const pane = $("#pane");
     const banner = reviewBanner(cur); if (banner) pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0">${banner}</div>`);
     if (curTab === "hdr") paneHeader(pane, def, tw);
@@ -2357,6 +2430,50 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     return `<div class="seg small" ${attr}>${[0, 1, 2, 3].map((s) => `<button data-sev="${s}" class="${val !== "" && val != null && +val === s ? "on s" + s : ""}">Sev ${s}</button>`).join("")}</div>`;
   }
 
+  const R_LABEL = { Y: "✓ OK", N: "✗ Defect", NA: "NA", NV: "NV" }, MARK_LABEL = { "✓": "✓ OK", "✗": "✗ Defect", NA: "NA", NV: "NV" };
+  function resultSeg(opts, r) { return `<div class="seg">${opts.map((o) => `<button data-r="${o}" class="${r === o ? "on " + o : ""}">${R_LABEL[o] || o}</button>`).join("")}</div>`; }
+  /** Bottom sheet to choose the mark of one box: ✓ OK, ✗ Defect, NA, NV or clear. */
+  function pickMark(title, current, apply) {
+    const sh = document.createElement("div"); sh.className = "sheet";
+    sh.innerHTML = `<div class="sheet-in"><div class="sheet-t">${esc(title)}</div><div class="seg">${["✓", "✗", "NA", "NV"].map((v) => `<button data-v="${v}" class="${current === v ? "on " : ""}${v === "✓" ? "ok" : v === "✗" ? "bad" : v}">${MARK_LABEL[v]}</button>`).join("")}</div>
+      <div class="row" style="margin-top:10px"><button class="btn grow" data-v="">Clear box</button><button class="btn grow" data-x="1">Cancel</button></div></div>`;
+    document.body.appendChild(sh);
+    sh.onclick = (ev) => { const b = ev.target.closest("[data-v]"); if (b) { sh.remove(); apply(b.dataset.v); } else if (ev.target === sh || ev.target.closest("[data-x]")) sh.remove(); };
+  }
+  /** One tap on an empty box = ✓ OK; a tap on a filled box opens the chooser. */
+  function tapMark(e, key, title, after) {
+    if (cur && (cur.status === "complete" || cur.heldBy)) return save();
+    if (!e[key]) { e[key] = "✓"; after(); }
+    else pickMark(title, e[key], (v) => { e[key] = v; after(); });
+  }
+  /** Photo slots that belong to a section: named in the item rows or captioned "↑ item n.x". */
+  function sectionPhotoIds(def, n, items) {
+    const ids = [];
+    (items || []).forEach((it) => String(it.photo || "").split(/[\s,]+/).forEach((x) => { if (/^[A-Z]{1,2}\d{1,2}$/.test(x) && !ids.includes(x)) ids.push(x); }));
+    (def.photos || []).forEach((p) => { const m = /item\s+(\d+)\./i.exec(p.label || ""); if (m && m[1] === String(n) && !ids.includes(p.id)) ids.push(p.id); });
+    const live = (cur.live || {}).done === "Yes";
+    return ids.filter((id) => (def.photos || []).some((p) => p.id === id) && (live || !/^LL/.test(id)));
+  }
+  /** "Photos for this section" card at the end of a section. */
+  async function sectionPhotos(pane, def, n, items) {
+    const ids = sectionPhotoIds(def, n, items); if (!ids.length) return;
+    const cap = (id) => ((def.photos || []).find((p) => p.id === id) || {}).caption || "";
+    const have = ids.filter((id) => cur.photos[id]).length;
+    pane.insertAdjacentHTML("beforeend", `<div class="card" id="secph"><h2>📷 Photos for this section <span class="muted">(${have}/${ids.length})</span></h2><p class="muted">Take them now, before moving to the next section. Defect photos are taken in the defect itself.</p>
+      <div class="photos">${ids.map((id) => `<div class="ph ${cur.photos[id] ? "have" : ""}"><div class="img" id="sim_${id}">📷</div><div class="cap"><b>${id}</b> – ${esc(cap(id))} ${cur.photos[id] ? '<span class="pill ok">taken</span>' : ""}</div>
+        <div class="act"><button class="btn sm pri" data-stake="${id}">${cur.photos[id] ? "Retake" : "Take"}</button></div></div>`).join("")}</div></div>`);
+    for (const id of ids) { if (cur.photos[id]) { const u = await thumb(id); const el = $("#sim_" + id); if (u && el) { el.style.backgroundImage = `url(${u})`; el.textContent = ""; } else if (el) el.textContent = "☁️"; } }
+    pane.querySelectorAll("[data-stake]").forEach((b) => (b.onclick = async () => {
+      if (cur.status === "complete" || cur.heldBy) return save();
+      const id = b.dataset.stake; if (await capture(id, cap(id))) { toast(id + " saved"); const y = window.scrollY; refreshTabs(); window.scrollTo(0, y); }
+    }));
+  }
+  /** Leave the record: it is already saved on the phone and sent when there is signal. */
+  async function saveClose() {
+    if (cur) { clearTimeout(saveTimer); await dbPut("insp", cur); syncNow(false); }
+    toast("Saved – continue any time from the home screen"); home();
+  }
+
   function paneSection(pane, def, tw, n) {
     const its = def.items.filter((i) => i.section.startsWith(n + "."));
     const legs = def.legs.filter((i) => i.section.startsWith(n + "."));
@@ -2364,19 +2481,19 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const sec = (its[0] || legs[0] || phs[0]).section;
     let html = `<div class="card"><h2>${esc(sec)}</h2>`;
     if (n === "12" && (cur.live || {}).done !== "Yes") html += `<p class="muted">Live-line inspection is set to "No" in the header – this section stays blank.</p>`;
-    html += `<div class="row" style="margin-bottom:6px"><button class="btn sm" id="allok">Mark remaining as satisfactory</button><span class="muted">only blanks are filled</span></div>`;
+    html += `<div class="row" style="margin-bottom:6px"><button class="btn sm" id="allok">Mark remaining as satisfactory</button><span class="muted">only blanks are filled</span></div><p class="muted legend">✓ OK = meets the <b>OK when</b> line · ✗ Defect = it does not (then give Sev, description and photo) · NA = not fitted here · NV = could not be seen. Boxes (legs / phases): tap once = ✓ OK; tap a filled box to choose ✗ Defect, NA or NV.</p>`;
     its.forEach((it) => {
       const e = cur.items[it.id] || {};
       const opts = def.items[0].col.NA != null && it.col.NA != null ? ["Y", "N", "NA", "NV"] : ["Y", "N"];
-      html += `<div class="item" data-it="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr">${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}${cur.auto && cur.auto[it.id] ? " auto" : ""}</span></div>
-        <div class="seg">${opts.map((o) => `<button data-r="${o}" class="${e.r === o ? "on " + o : ""}">${o}</button>`).join("")}</div>
+      html += `<div class="item" data-it="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr"><b>OK when:</b> ${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}${cur.auto && cur.auto[it.id] ? " auto" : ""}</span></div>
+        ${resultSeg(opts, e.r)}
         ${e.r === "N" ? `<div class="dfx">${sevSeg(e.sev, 'data-isev="' + it.id + '"')}${defLine(it.id, "")}</div>` : ""}
         ${e.r === "NV" || e.r === "NA" || e.r === "Y" ? `<input type="text" data-rem="${it.id}" value="${esc(e.rem || "")}" placeholder="Remark (optional)" style="margin-top:6px">` : ""}
       </div>`;
     });
     legs.forEach((it) => {
       const e = cur.legs[it.id] || {};
-      html += `<div class="item" data-leg="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr">${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}</span></div>
+      html += `<div class="item" data-leg="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr"><b>OK when:</b> ${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}</span></div>
         <div class="grid4">${Core.LEGS.map((l) => cellHtml("Leg " + l, e[l], "data-lc='" + l + "'")).join("")}</div>
         ${Core.LEGS.some((l) => e[l] === "✗") ? `<div class="dfx">${sevSeg(e.sev, 'data-lsev="' + it.id + '"')}${Core.LEGS.filter((l) => e[l] === "✗").map((l) => defLine(it.id + "/Leg " + l, "Leg " + l)).join("")}</div>` : ""}
       </div>`;
@@ -2384,7 +2501,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     phs.forEach((it) => {
       const e = cur.phases[it.id] || {};
       const sp = Core.SPECIAL_PHASE_ROWS[it.id];
-      html += `<div class="item" data-ph="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr">${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}${cur.auto && cur.auto["ph" + it.id] ? " auto" : ""}</span></div>
+      html += `<div class="item" data-ph="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr"><b>OK when:</b> ${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}${cur.auto && cur.auto["ph" + it.id] ? " auto" : ""}</span></div>
         <div class="grid6">${Core.PHASES.map((p) => cellHtml(p, e[p], "data-pc='" + p + "'")).join("")}</div>
         ${sp ? `<div class="muted" style="margin-top:4px">Tap to cycle: ${sp.join(" → ")}. Set a severity if this needs reporting.</div>${sevSeg(e.sev, 'data-psev="' + it.id + '"')}${+e.sev >= 1 ? defLine(it.id, "") : ""}` : ""}
         ${!sp && Core.PHASES.some((p) => e[p] === "✗") ? `<div class="dfx">${sevSeg(e.sev, 'data-psev="' + it.id + '"')}${Core.PHASES.filter((p) => e[p] === "✗").map((p) => defLine(it.id + "/" + p, p)).join("")}</div>` : ""}
@@ -2413,19 +2530,21 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     pane.querySelectorAll("[data-free]").forEach((el) => (el.oninput = () => { cur[el.dataset.free] = el.value; save(); }));
     const cycle = (vals, v) => vals[(vals.indexOf(v) + 1) % vals.length];
     pane.querySelectorAll("[data-leg]").forEach((row) => row.querySelectorAll("[data-lc]").forEach((c) => (c.onclick = () => {
-      const e = cur.legs[row.dataset.leg] = cur.legs[row.dataset.leg] || {};
-      e[c.dataset.lc] = cycle(["", "✓", "✗", "NA", "NV"], e[c.dataset.lc] || ""); if (!Core.LEGS.some((l) => e[l] === "✗")) delete e.sev;
-      save(); paneSection(pane, def, tw, n); refreshTabs();
+      const e = cur.legs[row.dataset.leg] = cur.legs[row.dataset.leg] || {}, it = def.legs.find((x) => x.id === row.dataset.leg) || {};
+      tapMark(e, c.dataset.lc, row.dataset.leg + " " + (it.name || "") + " – Leg " + c.dataset.lc, () => {
+        if (!Core.LEGS.some((l) => e[l] === "✗")) delete e.sev;
+        save(); const y = window.scrollY; paneSection(pane, def, tw, n); refreshTabs(); window.scrollTo(0, y);
+      });
     })));
     pane.querySelectorAll("[data-ph]").forEach((row) => row.querySelectorAll("[data-pc]").forEach((c) => (c.onclick = () => {
       const id = row.dataset.ph, e = cur.phases[id] = cur.phases[id] || {};
-      const vals = Core.SPECIAL_PHASE_ROWS[id] ? ["", ...Core.SPECIAL_PHASE_ROWS[id]] : ["", "✓", "✗", "NA", "NV"];
-      e[c.dataset.pc] = cycle(vals, e[c.dataset.pc] || ""); if (!Core.SPECIAL_PHASE_ROWS[id] && !Core.PHASES.some((p) => e[p] === "✗")) delete e.sev;
-      if (cur.auto) delete cur.auto["ph" + id];
-      save(); paneSection(pane, def, tw, n); refreshTabs();
+      const done = () => { if (!Core.SPECIAL_PHASE_ROWS[id] && !Core.PHASES.some((p) => e[p] === "✗")) delete e.sev; if (cur.auto) delete cur.auto["ph" + id]; save(); const y = window.scrollY; paneSection(pane, def, tw, n); refreshTabs(); window.scrollTo(0, y); };
+      if (Core.SPECIAL_PHASE_ROWS[id]) { e[c.dataset.pc] = cycle(["", ...Core.SPECIAL_PHASE_ROWS[id]], e[c.dataset.pc] || ""); done(); }
+      else { const it = def.phases.find((x) => x.id === id) || {}; tapMark(e, c.dataset.pc, id + " " + (it.name || "") + " – " + c.dataset.pc, done); }
     })));
+    sectionPhotos(pane, def, n, [...its, ...legs, ...phs]);
     $("#allok").onclick = () => {
-      if (!confirm("Fill every blank in this section as satisfactory (Y / ✓)? Only do this after you have checked them.")) return;
+      if (!confirm("Fill every blank in this section as satisfactory (✓ OK)? Only do this after you have checked them.")) return;
       auditTag = "bulk";
       its.forEach((it) => { const e = cur.items[it.id] = cur.items[it.id] || {}; if (!e.r) e.r = "Y"; });
       legs.forEach((it) => { const e = cur.legs[it.id] = cur.legs[it.id] || {}; Core.LEGS.forEach((l) => { if (!e[l]) e[l] = "✓"; }); });
@@ -2550,6 +2669,11 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   /** Completed records are read-only; a team leader, the E&I Engineer, or anyone on a returned record can reopen with a reason. */
   function lockPane(pane) {
+    if (cur && cur.heldBy) {
+      pane.classList.add("locked");
+      pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><div class="card" style="border-left:4px solid #e67e22"><b>Continued by another team member</b> – ${esc(cur.heldBy)}<div class="muted">This copy is read-only. The record carries on from their phone. You can delete this copy from the Generate tab.</div></div></div>`);
+      return;
+    }
     if (!cur || cur.status !== "complete") return;
     pane.classList.add("locked");
     pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><div class="card" style="border-left:4px solid #1e8e3e"><b>Completed</b> by ${esc((people[cur.completedBy] || {}).name || cur.signoff.inspector || cur.completedBy || "")} ${esc((cur.completed || "").slice(0, 16).replace("T", " "))} – read-only.
@@ -2671,7 +2795,9 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     pane.innerHTML = `<div class="card"><h2>Completeness check</h2>${issues.length ? `<p><b style="color:#c62828">${issues.length} item(s) open:</b></p><ul class="issues">${issues.slice(0, 40).map((i) => `<li>${esc(i)}</li>`).join("")}</ul>${issues.length > 40 ? "<p>…</p>" : ""}` : '<p style="color:#1e8e3e"><b>All points, defects and photos complete.</b></p>'}
       ${d != null && d > 300 ? `<p style="color:#c62828"><b>GPS shows you ${d} m from ${esc(cur.structure)}.</b> Check the tower number.</p>` : ""}</div>
       <div class="card"><h2>Finish ${esc(cur.structure)}</h2>
-        <p class="muted">Everything is sent automatically while you work. "Tower complete" closes the record; the laptop then builds the final checklist and registers.</p>
+        <p class="muted">Everything is saved on the phone and sent automatically while you work. "Tower complete" closes the record; the laptop then builds the final checklist and registers.</p>
+        <div class="row" style="margin-bottom:8px"><button class="btn grow" id="gLater">Save – finish later</button></div>
+        <p class="muted">Not finished? Leave it here – you, or another team member from their own phone, can continue it later.</p>
         <div class="row"><button class="btn pri grow" id="gDone" ${issues.length ? "disabled" : ""}>Tower complete – send</button></div>
         ${issues.length ? `<p class="muted">Complete the open items above first. Only if a point truly cannot be done, mark it NV with the reason.</p>` : ""}
         <div class="row" style="margin-top:8px"><button class="btn grow" id="gSync">Send now</button><button class="btn grow" id="gPkg">Backup file (no signal for days)</button></div>
@@ -2680,6 +2806,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       if (!cur.header.timeTo) cur.header.timeTo = nowHM();
       completeRecord(); await dbPut("insp", cur); await syncNow(true); toast(cur.structure + " complete"); home();
     };
+    $("#gLater").onclick = saveClose;
     $("#gSync").onclick = () => syncNow(true);
     $("#gPkg").onclick = () => exportPackages([cur]);
     $("#gDel").onclick = async () => {
@@ -2763,7 +2890,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const idx = tabs.findIndex((t) => t[0] === curTab);
     $("#prev").onclick = () => { if (idx > 0) { curTab = tabs[idx - 1][0]; renderGen(); window.scrollTo(0, 0); } };
     $("#next").onclick = () => { if (idx < tabs.length - 1) { curTab = tabs[idx + 1][0]; renderGen(); window.scrollTo(0, 0); } };
-    if (idx === tabs.length - 1) $("#next").disabled = true;
+    if (idx === tabs.length - 1) { $("#next").textContent = "Save & close"; $("#next").onclick = saveClose; }
     const pane = $("#pane");
     const banner = reviewBanner(cur); if (banner) pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0">${banner}</div>`);
     if (curTab === "hdr") genHeader(pane, def, tw);
@@ -2801,19 +2928,19 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const its = def.items.filter((i) => secNo(i.id) === n), pos = def.positions.filter((i) => secNo(i.id) === n);
     const heads = [...new Set([...its, ...pos].map((i) => i.section).filter(Boolean))];
     let html = `<div class="card"><h2>${esc(heads[0] || "Section " + n)}</h2>${heads.slice(1).map((h) => `<div class="muted">${esc(h)}</div>`).join("")}
-      <div class="row" style="margin-bottom:6px"><button class="btn sm" id="allok">Mark remaining as satisfactory</button><span class="muted">only blanks are filled</span></div>`;
+      <div class="row" style="margin-bottom:6px"><button class="btn sm" id="allok">Mark remaining as satisfactory</button><span class="muted">only blanks are filled</span></div><p class="muted legend">✓ OK = meets the <b>OK when</b> line · ✗ Defect = it does not (then give Sev, description and photo) · NA = not fitted here · NV = could not be seen. Boxes (legs / phases): tap once = ✓ OK; tap a filled box to choose ✗ Defect, NA or NV.</p>`;
     its.forEach((it) => {
       const e = cur.items[it.id] || {};
       const opts = ["Y", "N", "NA", "NV"].filter((o) => it.col[o] != null);
-      html += `<div class="item" data-it="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr">${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}</span></div>
-        <div class="seg">${opts.map((o) => `<button data-r="${o}" class="${e.r === o ? "on " + o : ""}">${o}</button>`).join("")}</div>
+      html += `<div class="item" data-it="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr"><b>OK when:</b> ${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}</span></div>
+        ${resultSeg(opts, e.r)}
         ${e.r === "N" ? `<div class="dfx">${sevSeg(e.sev, 'data-isev="' + it.id + '"')}${defLine(it.id, "")}</div>` : ""}
         ${e.r && e.r !== "N" ? `<input type="text" data-rem="${it.id}" value="${esc(e.rem || "")}" placeholder="Remark (optional)" style="margin-top:6px">` : ""}</div>`;
     });
     pos.forEach((it) => {
       const e = cur.pos[it.id] || {}, dust = Core.Forms.isDust(it);
       const bad = it.posLabels.filter((l) => e[l] === "✗");
-      html += `<div class="item" data-pos="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr">${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}</span></div>
+      html += `<div class="item" data-pos="${it.id}"><div class="hd"><span class="no">${it.id}</span><div class="grow"><div class="nm">${esc(it.name)}</div><div class="cr"><b>OK when:</b> ${esc(it.criteria)}</div></div><span class="app">${esc(it.app)}</span></div>
         <div class="grid6">${it.posLabels.map((l) => cellHtml(l, e[l], "data-pl='" + esc(l) + "'")).join("")}</div>
         ${dust ? `<div class="muted" style="margin-top:4px">Tap to cycle: ${Core.Forms.DUST.slice(1).join(" → ")}. Set a severity if this needs reporting.</div>${sevSeg(e.sev, 'data-psev="' + it.id + '"')}${+e.sev >= 1 ? defLine(it.id, "") : ""}`
           : bad.length ? `<div class="dfx">${sevSeg(e.sev, 'data-psev="' + it.id + '"')}${bad.map((l) => defLine(it.id + "/" + l, l)).join("")}</div>` : ""}</div>`;
@@ -2829,13 +2956,14 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const cycle = (vals, v) => vals[(vals.indexOf(v) + 1) % vals.length];
     pane.querySelectorAll("[data-pos]").forEach((row) => row.querySelectorAll("[data-pl]").forEach((c) => (c.onclick = () => {
       const it = def.positions.find((x) => x.id === row.dataset.pos), e = cur.pos[it.id] = cur.pos[it.id] || {};
-      e[c.dataset.pl] = cycle(Core.Forms.isDust(it) ? Core.Forms.DUST : Core.Forms.MARKS, e[c.dataset.pl] || "");
-      if (!Core.Forms.isDust(it) && !it.posLabels.some((l) => e[l] === "✗")) delete e.sev;
-      save(); redraw(); refreshTabs();
+      const done = () => { if (!Core.Forms.isDust(it) && !it.posLabels.some((l) => e[l] === "✗")) delete e.sev; save(); const y = window.scrollY; redraw(); refreshTabs(); window.scrollTo(0, y); };
+      if (Core.Forms.isDust(it)) { e[c.dataset.pl] = cycle(Core.Forms.DUST, e[c.dataset.pl] || ""); done(); }
+      else tapMark(e, c.dataset.pl, it.id + " " + (it.name || "") + " – " + c.dataset.pl, done);
     })));
     bindDefects(pane, redraw);
+    sectionPhotos(pane, def, n, [...its, ...pos]);
     $("#allok").onclick = () => {
-      if (!confirm("Fill every blank in this section as satisfactory (Y / ✓)? Only do this after you have checked them.")) return;
+      if (!confirm("Fill every blank in this section as satisfactory (✓ OK)? Only do this after you have checked them.")) return;
       its.forEach((it) => { const e = cur.items[it.id] = cur.items[it.id] || {}; if (!e.r) e.r = "Y"; });
       pos.forEach((it) => { if (Core.Forms.isDust(it)) return; const e = cur.pos[it.id] = cur.pos[it.id] || {}; it.posLabels.forEach((l) => { if (!e[l]) e[l] = "✓"; }); });
       tagged("bulk", save); redraw(); refreshTabs();
@@ -2868,14 +2996,14 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <div class="grid4">${inputs}</div><div class="gst" data-gst="${row.r}">${status(row)}</div></div>`;
     };
     const rowsOf = g.rows.filter((r) => !r.free);
-    pane.innerHTML = `<div class="card"><h2>${esc(titleCase(g.title))}</h2><p class="muted">${rowsOf.length} rows. Tap a box to cycle ✓ ✗ NA NV. Type OL for an open circuit; readings above the limit are graded automatically.</p>
+    pane.innerHTML = `<div class="card"><h2>${esc(titleCase(g.title))}</h2><p class="muted">${rowsOf.length} rows. Tap a box once = ✓ OK; tap it again to choose ✗ Defect, NA or NV. Type OL for an open circuit; readings above the limit are graded automatically.</p>
       <div class="row" style="margin-bottom:6px"><button class="btn sm" id="gok">Mark remaining boxes ✓</button></div>${rowsOf.map(card).join("")}</div>`;
     const at = (s) => { const [r, c] = s.split(":").map(Number); return [G[r] = G[r] || {}, c, g.rows.find((x) => x.r === r)]; };
     const bindRow = (el) => {
       const rowOf = () => g.rows.find((x) => x.r === +el.dataset.grow);
       const restat = () => { const st = el.querySelector("[data-gst]"); st.innerHTML = status(rowOf()); bindDefects(st, () => restat()); };
       const redrawRow = () => { const n = document.createElement("div"); n.innerHTML = card(rowOf()); const ne = n.firstElementChild; el.replaceWith(ne); bindRow(ne); };
-      el.querySelectorAll("[data-gm]").forEach((x) => (x.onclick = () => { const [e, c] = at(x.dataset.gm); e[c] = Core.Forms.MARKS[(Core.Forms.MARKS.indexOf(e[c] || "") + 1) % Core.Forms.MARKS.length]; save(); redrawRow(); }));
+      el.querySelectorAll("[data-gm]").forEach((x) => (x.onclick = () => { const [e, c, row] = at(x.dataset.gm); tapMark(e, c, row.label + " – " + g.cols[c].replace(/\n/g, " "), () => { save(); redrawRow(); }); }));
       el.querySelectorAll("[data-gv]").forEach((x) => (x.onchange = () => { const [e, c] = at(x.dataset.gv); let v = x.value.trim(); if (ct(c) === "number" && /^ol$/i.test(v)) v = "OL"; if (/^nv$/i.test(v)) v = "NV"; if (v !== x.value) x.value = v; e[c] = v; save(); restat(); }));
       el.querySelectorAll("[data-gs]").forEach((gr) => gr.querySelectorAll("button").forEach((b) => (b.onclick = () => {
         const [e, c, row] = at(gr.dataset.gs), nv = String(e[c]) === b.dataset.sev ? "" : b.dataset.sev;
@@ -3074,10 +3202,11 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /* ------------------------------ upload queue ------------------------------ */
   // Order per inspection: photos first, then the package, so the engine and the Sev 3 e-mail find the photos.
   let syncing = false, syncTimer = null, lastSync = null, lastErr = "";
-  function markDirty() { if (!cur) return; if (cur.status === "complete") return; audit(); cur.rev = (cur.rev || 0) + 1; cur.updated = new Date().toISOString(); clearTimeout(saveTimer); { const c = cur; saveTimer = setTimeout(() => c && dbPut("insp", c), 250); }; queueSync(); }
+  function markDirty() { if (!cur) return; if (cur.status === "complete" || cur.heldBy) return; audit(); cur.rev = (cur.rev || 0) + 1; cur.updated = new Date().toISOString(); clearTimeout(saveTimer); { const c = cur; saveTimer = setTimeout(() => c && dbPut("insp", c), 250); }; queueSync(); }
   function queueSync() { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(false), 4000); }
   const folderOf = (p) => p.structure + "_" + Core.formCode(p.form);
   async function pendingCount(p) {
+    if (p.heldBy) return 0;
     let n = (p.sentRev || 0) < (p.rev || 0) ? 1 : 0;
     for (const k of Object.keys(p.photos || {})) { const r = await dbGet("photos", p.id + "/" + k); if (r && !r.uploaded) n++; }
     return n;
@@ -3100,7 +3229,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     try {
       const all = await dbAll("insp");
       for (const p of all) {
-        who = uploaderFor(p); if (!who) continue;
+        who = uploaderFor(p); if (!who || p.heldBy) continue;
+        try {
         for (const k of Object.keys(p.photos || {})) {
           const key = p.id + "/" + k, r = await dbGet("photos", key);
           if (!r || r.uploaded || !r.orig) continue;
@@ -3127,6 +3257,12 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
           await dbPut("insp", fresh); if (cur && cur.id === p.id) { keepSigs(cur); cur.sentRev = fresh.sentRev; cur.sentAt = fresh.sentAt; }
           if (j.alerts) toast("Sev 3 alert sent to the E&I Engineer");
           sent++;
+        }
+        } catch (e) {
+          if (!/^HELD BY/.test(e.message || "")) throw e;
+          const fresh = await dbGet("insp", p.id); fresh.heldBy = e.message.replace(/^HELD BY\s*/, ""); await dbPut("insp", fresh);
+          if (cur && cur.id === p.id) { cur.heldBy = fresh.heldBy; if (view === "insp") refreshTabs(); }
+          toast(p.structure + " is now being continued by " + fresh.heldBy.split(" –")[0] + " – your copy is read-only", 6000);
         }
       }
       lastSync = new Date(); lastErr = "";
