@@ -1998,8 +1998,9 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const dbAll = (st) => tx(st, "readonly", (s) => s.getAll());
   const dbKeys = (st) => tx(st, "readonly", (s) => s.getAllKeys());
 
-  let settings = { round: "2026B", option: "CHK-01A", inspectors: "MF Inspector 1, MF Inspector 2", inspector: "", verifier: "Shafaqat Ali", earthLimit: 10, instrument: "Hioki FT6031 earth tester", serial: "241104390", calDue: "2026-12-23", endpoint: "", key: "", device: "", freeSpace: true };
-  async function loadSettings() { const s = await dbGet("kv", "settings"); if (s) settings = Object.assign(settings, s); }
+  const DEFAULT_ENDPOINT = "https://script.google.com/macros/s/AKfycbxuPdXOYLwRY085kDTyEg6QP6jVAPlGdMjYBS2CX2f06pFBCFuBhNXP_mluxZv_DEvfUA/exec";
+  let settings = { round: "2026B", option: "CHK-01A", inspectors: "MF Inspector 1, MF Inspector 2", inspector: "", verifier: "Shafaqat Ali", earthLimit: 10, instrument: "Hioki FT6031 earth tester", serial: "241104390", calDue: "2026-12-23", endpoint: DEFAULT_ENDPOINT, key: "", device: "", freeSpace: true };
+  async function loadSettings() { const s = await dbGet("kv", "settings"); if (s) settings = Object.assign(settings, s); if (!settings.endpoint) settings.endpoint = DEFAULT_ENDPOINT; }
   const saveSettings = () => dbPut("kv", settings, "settings");
 
   /* ------------------------------ personal sign-in ------------------------------ */
