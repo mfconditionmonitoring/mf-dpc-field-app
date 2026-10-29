@@ -504,6 +504,11 @@ window.MF_ASSETS={};
     }
     /** ✓ / ✗ / NA / NV text in leg, phase and position cells. */
     markText(tc, v) { const c = { "✓": "1E8E3E", "✗": "C62828", NA: "6D7B83", NV: "9A6B00" }[v]; if (c) this.paint(tc, c); }
+    /** A defect box or ✗ cell: shaded in the severity colour with a white mark (dark on Sev 1 yellow). */
+    defectCell(tc, sev) {
+      const F = { 1: ["F5C518", "000000"], 2: ["F08A00", "FFFFFF"], 3: ["D32F2F", "FFFFFF"] }[+sev];
+      if (F) this.paint(tc, F[1], F[0]);
+    }
     /** Severity cell: 1 yellow, 2 orange, 3 red. */
     sevCell(tc, sev) {
       const F = { 1: ["F5C518", "000000"], 2: ["F08A00", "FFFFFF"], 3: ["D32F2F", "FFFFFF"] }[+sev];
@@ -640,7 +645,7 @@ window.MF_ASSETS={};
     (pkg.defects || []).forEach((x) => { (defectsByPoint[x.point] = defectsByPoint[x.point] || []).push(x); });
     for (const it of def.items) {
       const e = (pkg.items || {})[it.id] || {};
-      ["Y", "N", "NA", "NV"].forEach((k) => { if (it.col[k] != null) d.tickMark(d.tc(it.t, it.r, it.col[k]), e.r === k, k); });
+      ["Y", "N", "NA", "NV"].forEach((k) => { if (it.col[k] != null) { const bc = d.tc(it.t, it.r, it.col[k]); d.tickMark(bc, e.r === k, k); if (k === "N" && e.r === "N") d.defectCell(bc, e.sev); } });
       if (it.col.Sev != null) { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
       const dfs = (defectsByPoint[it.id] || []).filter((x) => !x.pos);
       const ph = [].concat(...dfs.map(photoRefs));
@@ -650,12 +655,12 @@ window.MF_ASSETS={};
     }
     for (const it of def.legs) {
       const e = (pkg.legs || {})[it.id] || {};
-      LEGS.forEach((l) => { const c = d.tc(it.t, it.r, it.col["Leg " + l]); d.setText(c, e[l] || ""); d.markText(c, e[l]); });
+      LEGS.forEach((l) => { const c = d.tc(it.t, it.r, it.col["Leg " + l]); d.setText(c, e[l] || ""); d.markText(c, e[l]); if (e[l] === "✗") d.defectCell(c, e.sev); });
       { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
     }
     for (const it of def.phases) {
       const e = (pkg.phases || {})[it.id] || {};
-      PHASES.forEach((p) => { const c = d.tc(it.t, it.r, it.col[p]); d.setText(c, e[p] || ""); d.markText(c, e[p]); });
+      PHASES.forEach((p) => { const c = d.tc(it.t, it.r, it.col[p]); d.setText(c, e[p] || ""); d.markText(c, e[p]); if (e[p] === "✗") d.defectCell(c, e.sev); });
       { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
     }
     const posLines = (kind) => (pkg.defects || []).filter((x) => x.pos && (kind === "leg" ? /^Leg /.test(x.pos) : !/^Leg /.test(x.pos) && !/^Lead /.test(x.pos)))
@@ -1705,7 +1710,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     // position tables
     def.positions.forEach((it) => {
       const e = (pkg.pos || {})[it.id] || {};
-      it.posLabels.forEach((l) => { const c = d.tc(it.t, it.r, it.col[l]); d.setText(c, e[l] || ""); d.markText(c, e[l]); });
+      it.posLabels.forEach((l) => { const c = d.tc(it.t, it.r, it.col[l]); d.setText(c, e[l] || ""); d.markText(c, e[l]); if (e[l] === "✗") d.defectCell(c, e.sev); });
       if (it.col.Sev != null) { const sc = d.tc(it.t, it.r, it.col.Sev); d.setText(sc, e.sev === 0 || e.sev ? String(e.sev) : ""); d.sevCell(sc, e.sev); }
     });
     // reading grids
@@ -2109,7 +2114,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.3.0";
+  const APP_VERSION = "1.3.1";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const today = () => new Date().toISOString().slice(0, 10);
@@ -2240,7 +2245,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /* ------------------------------ new inspection ------------------------------ */
   function newInspection(form, towerId) {
     const def = DEFS[form], tw = TW[towerId];
-    const team = settings.inspectors;
+    const team = settings.inspectors && !/MF Inspector \d/.test(settings.inspectors) ? settings.inspectors : me ? me.name : "";
     const p = { id: towerId + "_" + form + "_" + settings.round + "_" + Date.now().toString(36), schema: 1, app: "MF-DPC-132 Field App", appVersion: APP_VERSION,
       form, formRev: (def && def.rev) || "", round: settings.round, structure: towerId, created: new Date().toISOString(), updated: new Date().toISOString(), status: "open",
       header: { date: today(), timeFrom: nowHM(), timeTo: "", weather: "", team, insulator: [], opgwJoint: "No", method: ["Ground visual", "Binoculars"] },
@@ -2984,7 +2989,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     def.headerInputs.forEach((x) => {
       if ((a.header || {})[x.label] !== undefined) return; // filled from the item list
       const k = hinKind(x);
-      if (/team/i.test(x.label)) p.hin[x.label] = settings.inspectors;
+      if (/team/i.test(x.label)) p.hin[x.label] = settings.inspectors && !/MF Inspector \d/.test(settings.inspectors) ? settings.inspectors : me ? me.name : "";
       else if (k === "date" && !/due|cert/i.test(x.label)) p.hin[x.label] = today();
       else if (/^Test date\(s\)$/.test(x.label)) p.hin[x.label] = today();
       else if (k === "time") p.hin[x.label] = nowHM();
