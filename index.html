@@ -1988,7 +1988,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     Object.entries(pkg.photos || {}).forEach(([slot, ph]) => {
       if (!ph) return;
       if (ph.dist != null && ph.dist > cfg.maxDist) far.push(slot + " " + ph.dist + " m" + (ph.why ? " (" + ph.why + ")" : ""));
-      if (ph.ageMin != null && ph.ageMin > cfg.maxPhotoAgeMin) old.push(slot + " taken " + String(ph.taken || "").slice(0, 16).replace("T", " ") + (ph.why ? " (" + ph.why + ")" : ""));
+      if (ph.ageMin != null && ph.ageMin > cfg.maxPhotoAgeMin) old.push(slot + " taken " + (ph.taken ? new Date(Date.parse(ph.taken) + 144e5).toISOString().slice(0, 16).replace("T", " ") : "") + (ph.why ? " (" + ph.why + ")" : ""));
       if (!ph.sha && !ph.camera) nosha.push(slot);
       const fs = (ctx.fileSha || {})[slot];
       if (ph.sha && fs && fs !== ph.sha) mism.push(slot);
@@ -2114,11 +2114,13 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.3.1";
+  const APP_VERSION = "1.3.2";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const today = () => new Date().toISOString().slice(0, 10);
-  const nowHM = () => new Date().toTimeString().slice(0, 5);
+  /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
+  const OMT = (iso) => { const d = iso ? new Date(iso) : new Date(); return isNaN(d) ? String(iso || "") : new Date(d.getTime() + 4 * 3600e3).toISOString().slice(0, 19).replace("T", " "); };
+  const today = () => OMT().slice(0, 10);
+  const nowHM = () => OMT().slice(11, 16);
   const FORM_TITLE = { "CHK-01A": "CHK-01 Tower visual – Option A", "CHK-01B": "CHK-01 Tower visual – Option B (live-line section 12)", "CHK-10": "CHK-10 Tower earth resistance test" };
 
   /* ------------------------------ storage ------------------------------ */
@@ -2284,7 +2286,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   let teamStatus = { round: "", at: "", list: {} };
   const signer = () => (me && me.secret ? me : Object.values(people).find((x) => x.secret) || null);
   const nameOfId = (id) => ((((config && config.team) || []).find((x) => x.id === id) || {}).name || (people[id] || {}).name || id || "");
-  const hm = (iso) => { if (!iso) return ""; const d = new Date(iso); return d.toISOString().slice(0, 10) === today() ? d.toTimeString().slice(0, 5) : d.toISOString().slice(0, 10) + " " + d.toTimeString().slice(0, 5); };
+  const hm = (iso) => { if (!iso) return ""; const o = OMT(iso); return o.slice(0, 10) === today() ? o.slice(11, 16) : o.slice(0, 16); };
   function statusFor(structure, form) { const e = (teamStatus.list || {})[structure + "_" + Core.formCode(form)]; return teamStatus.round === settings.round ? e || null : null; }
   function statusText(st) {
     if (!st) return "";
@@ -2842,7 +2844,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     }
     if (!cur || cur.status !== "complete") return;
     pane.classList.add("locked");
-    pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><div class="card" style="border-left:4px solid #1e8e3e"><b>Completed</b> by ${esc((people[cur.completedBy] || {}).name || cur.signoff.inspector || cur.completedBy || "")} ${esc((cur.completed || "").slice(0, 16).replace("T", " "))} – read-only.
+    pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><div class="card" style="border-left:4px solid #1e8e3e"><b>Completed</b> by ${esc((people[cur.completedBy] || {}).name || cur.signoff.inspector || cur.completedBy || "")} ${esc((cur.completed ? OMT(cur.completed).slice(0, 16) : ""))} – read-only.
       ${canReopen(cur) ? '<div class="row" style="margin-top:8px"><button class="btn sm warn" id="reopen">Reopen to correct</button></div>' : ""}</div></div>`);
     const b = $("#reopen"); if (b) b.onclick = async () => {
       const r = prompt("Reason for reopening " + cur.structure + " (kept in the record):"); if (!r || !r.trim()) return;
@@ -3452,7 +3454,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   function reviewBanner(p) {
     const r = reviewOf(p); if (!r || r.status !== "returned" || (p.sentAt && p.sentAt > r.time)) return "";
-    return `<div class="card" style="border:2px solid #c62828;background:#fff4f2"><h2 style="color:#c62828">Returned by the E&amp;I Engineer</h2><p>${esc(r.note)}</p><p class="muted">${esc(r.by || "")} · ${esc((r.time || "").replace("T", " ").slice(0, 16))}. Correct it, then press "Tower complete – send" again.</p></div>`;
+    return `<div class="card" style="border:2px solid #c62828;background:#fff4f2"><h2 style="color:#c62828">Returned by the E&amp;I Engineer</h2><p>${esc(r.note)}</p><p class="muted">${esc(r.by || "")} · ${esc(r.time ? OMT(r.time).slice(0, 16) : "")}. Correct it, then press "Tower complete – send" again.</p></div>`;
   }
 
   /* ------------------------------ config from the office ------------------------------ */
