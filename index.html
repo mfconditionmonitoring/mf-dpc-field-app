@@ -200,6 +200,16 @@ input.camno{margin-top:6px;min-height:38px;font-size:14px;padding:6px 9px}
 .cam .cbar .btn{min-width:110px}
 .cam .shutter{width:74px;height:74px;border-radius:50%;border:5px solid #fff;background:radial-gradient(circle,#fff 0 56%,transparent 58%);box-shadow:0 0 0 3px rgba(240,90,40,.7)}
 .cam.flash video{opacity:.35;transition:opacity .08s}
+
+/* 1.4: connection light and structure status */
+#sync{display:inline-flex;align-items:center;gap:7px;color:#fff;font-weight:600;cursor:pointer}
+#sync .dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:none}
+#sync.pulse .dot{animation:blink 1s ease-in-out infinite}
+@keyframes blink{50%{opacity:.35}}
+.stb{margin-top:8px;padding:9px 11px;border-radius:10px;font-weight:700;font-size:14px;color:#13202a}
+.stb.done{background:#E3F4EA;border-left:5px solid #1E8E3E}
+.stb.prog{background:#FFF1DE;border-left:5px solid #F08A00}
+.stb.free{background:#EEF2F5;border-left:5px solid #8A9BA6;font-weight:600;color:#4b5b66}
 </style></head>
 <body>
 <header class="top"><button id="back" class="hide">‹ Home</button><h1 id="title">MF-DPC-132 Field App</h1></header>
@@ -2114,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.3.2";
+  const APP_VERSION = "1.4.0";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2368,19 +2378,20 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       ${isLead() ? `<div class="card"><h2>Team inspections</h2><div class="list" id="team"></div></div>` : ""}
       <p class="ver">Version ${APP_VERSION}</p>`;
     const norm = (v) => { v = (v || "").trim().toUpperCase(); if (/^\d+$/.test(v)) return "T" + v.padStart(3, "0"); return v; };
-    const towerOpts = $("#tl").innerHTML;
+    const optLabel = (id, base, f) => { const st = statusFor(id, f); return base + (st ? (st.status === "complete" ? " · ✅ done – " : " · 🟠 in progress – ") + (st.holderName || nameOfId(st.holder)).split(" ")[0] : ""); };
+    const towerOptsFor = (f) => TOWERS.map((t) => `<option value="${t.id}">${esc(optLabel(t.id, t.typeText, f))}</option>`).join("");
     $("#nf").onchange = () => {
       const f = $("#nf").value, A = isAssetForm(f);
       $("#ntl").textContent = A ? "Item inspected" : "Tower / structure";
       $("#nt").placeholder = A ? "Pick from the list, e.g. " + ((assetList(f)[0] || {}).id || "") : "Tower number, e.g. 4 or T004";
       $("#nt").setAttribute("inputmode", A ? "text" : "numeric");
-      $("#tl").innerHTML = A ? assetList(f).map((a) => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("") : towerOpts;
+      $("#tl").innerHTML = A ? assetList(f).map((a) => `<option value="${esc(a.id)}">${esc(optLabel(a.id, a.name, f))}</option>`).join("") : towerOptsFor(f);
       if (A && assetList(f).length === 1) $("#nt").value = assetList(f)[0].id; else $("#nt").value = "";
       $("#nt").oninput();
     };
     $("#nt").oninput = () => {
       const f = $("#nf").value;
-      const stLine = (id) => { const st = statusFor(id, f); return st ? "<br><b>" + esc(statusText(st)) + "</b>" : ""; };
+      const stLine = (id) => { const st = statusFor(id, f); if (!st) return teamStatus.round === settings.round ? '<div class="stb free">Not started by anyone yet</div>' : ""; return '<div class="stb ' + (st.status === "complete" ? "done" : "prog") + '">' + esc(statusText(st)) + "</div>"; };
       if (isAssetForm(f)) { const aid = $("#nt").value.trim().toUpperCase(), a = structOf(f, aid); $("#ntinfo").innerHTML = a ? esc(a.typeText + (towerDist(a) != null ? " · " + towerDist(a) + " m away" : "")) + stLine(aid) : ""; return; }
       const tid = norm($("#nt").value), t = TW[tid]; $("#ntinfo").innerHTML = t ? esc(`${t.typeText} · ext ${t.ext} · chainage ${t.chainage} m${towerDist(t) != null ? " · " + towerDist(t) + " m away" : ""}`) + stLine(tid) : ""; };
     $("#near").onclick = () => {
@@ -2415,7 +2426,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     loadTeamStatus().then(async () => {
       if (view !== "home" || !$("#nt")) return;
       const a2 = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
-      renderDash(a2); renderNext(a2); renderMine(a2); if (isLead()) renderTeam(a2); $("#nt").oninput();
+      renderDash(a2); renderNext(a2); renderMine(a2); if (isLead()) renderTeam(a2);
+      const keep = $("#nt").value; $("#nf").onchange(); $("#nt").value = keep; $("#nt").oninput();
     });
   }
   /** What is kept on the phone until there is signal, and how much room is left. */
@@ -3439,9 +3451,13 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const el = $("#sync"); if (!el) return;
     let n = 0; for (const p of await dbAll("insp")) n += await pendingCount(p);
     const off = !navigator.onLine || /fetch|network|Load failed/i.test(lastErr);
-    el.textContent = syncing ? "↑ sending…" : off && n ? "📴 " + n + " held" : n ? "↑ " + n + " waiting" : settings.endpoint ? "✓ sent" : "not linked";
-    el.title = off ? "No signal – kept on this phone" : lastErr ? "Last error: " + lastErr : lastSync ? "Last sent " + lastSync.toTimeString().slice(0, 5) : "";
-    el.style.background = lastErr && !off ? "#c62828" : n ? "#F39C12" : "transparent";
+    // green = online and everything sent · orange = sending / waiting to send · red = no communication with the office
+    const red = off || !!lastErr || !settings.endpoint, orange = !red && (syncing || n > 0);
+    const col = red ? "#E53935" : orange ? "#FB8C00" : "#2ECC71";
+    const txt = syncing ? "Sending…" : red ? (n ? n + " held – no link" : "No link") : n ? n + " to send" : "Online · synced";
+    el.innerHTML = `<i class="dot" style="background:${col};box-shadow:0 0 0 3px ${col}44,0 0 8px ${col}"></i>${esc(txt)}`;
+    el.title = off ? "No signal – everything is kept on this phone and sent later" : lastErr ? "Last error: " + lastErr : lastSync ? "Last sent " + OMT(lastSync.toISOString()).slice(11, 16) : "";
+    el.style.background = "rgba(255,255,255,.08)"; el.classList.toggle("pulse", syncing);
   }
 
   /* ------------------------------ E&I review results ------------------------------ */
