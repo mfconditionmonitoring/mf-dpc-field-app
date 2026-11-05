@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.4.0";
+  const APP_VERSION = "1.4.1";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2235,6 +2235,11 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
 
   /* ------------------------------ helpers ------------------------------ */
+  /** Opens Google Maps turn-by-turn directions (live GPS) from where the phone is to a tower. */
+  function openDirections(t) {
+    if (!t || t.lat == null || t.lon == null) return toast("No coordinates for this structure.");
+    window.open("https://www.google.com/maps/dir/?api=1&destination=" + t.lat + "," + t.lon + "&travelmode=driving", "_blank");
+  }
   function toast(msg, ms = 2600) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), ms); }
   function b64ToBytes(b64) { const s = atob(b64), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
   function download(bytes, name, type) {
@@ -2372,7 +2377,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <input id="nt" type="text" inputmode="numeric" list="tl" autocomplete="off">
         <datalist id="tl">${TOWERS.map((t) => `<option value="${t.id}">${t.typeText}</option>`).join("")}</datalist>
         <div id="ntinfo" class="muted" style="margin-top:6px"></div>
-        <div class="row" style="margin-top:12px"><button class="btn pri grow" id="start">Start inspection</button><button class="btn" id="near">Nearest tower</button></div>
+        <div class="row" style="margin-top:12px"><button class="btn pri grow" id="start">Start inspection</button><button class="btn" id="near">Nearest tower</button><button class="btn" id="navgo">🧭 Directions</button></div>
       </div>
       <div class="card"><h2>On this phone</h2><div class="list" id="mine"></div><div id="space"></div></div>
       ${isLead() ? `<div class="card"><h2>Team inspections</h2><div class="list" id="team"></div></div>` : ""}
@@ -2394,6 +2399,12 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       const stLine = (id) => { const st = statusFor(id, f); if (!st) return teamStatus.round === settings.round ? '<div class="stb free">Not started by anyone yet</div>' : ""; return '<div class="stb ' + (st.status === "complete" ? "done" : "prog") + '">' + esc(statusText(st)) + "</div>"; };
       if (isAssetForm(f)) { const aid = $("#nt").value.trim().toUpperCase(), a = structOf(f, aid); $("#ntinfo").innerHTML = a ? esc(a.typeText + (towerDist(a) != null ? " · " + towerDist(a) + " m away" : "")) + stLine(aid) : ""; return; }
       const tid = norm($("#nt").value), t = TW[tid]; $("#ntinfo").innerHTML = t ? esc(`${t.typeText} · ext ${t.ext} · chainage ${t.chainage} m${towerDist(t) != null ? " · " + towerDist(t) + " m away" : ""}`) + stLine(tid) : ""; };
+    $("#navgo").onclick = () => {
+      const f = $("#nf").value, v = $("#nt").value.trim();
+      const t = isAssetForm(f) ? structOf(f, v.toUpperCase()) : TW[norm(v)];
+      if (!t) return toast("Type a tower number (e.g. 145) or tap Nearest tower first.");
+      openDirections(t);
+    };
     $("#near").onclick = () => {
       if (!fix) return toast("No GPS fix yet – wait a moment outdoors.");
       if (isAssetForm($("#nf").value)) { let b = null; assetList($("#nf").value).forEach((a) => { const d = towerDist(a); if (d != null && (b == null || d < b.d)) b = { a, d }; }); if (!b) return toast("No GPS position for these items."); $("#nt").value = b.a.id; $("#nt").oninput(); return toast("Nearest: " + b.a.id + " (" + b.d + " m)"); }
@@ -2518,6 +2529,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     if (idx === tabs.length - 1) { $("#next").textContent = "Save & close"; $("#next").onclick = saveClose; }
     const pane = $("#pane");
     const banner = reviewBanner(cur); if (banner) pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0">${banner}</div>`);
+    if (curTab === "hdr" && tw && tw.lat != null) { pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><button class="btn" id="navT">🧭 Directions to ${esc(tw.id)}</button></div>`); $("#navT").onclick = () => openDirections(tw); }
     if (curTab === "hdr") paneHeader(pane, def, tw);
     else if (curTab === "earth") paneEarth(pane, def, tw);
     else if (curTab === "live") paneLive(pane, def);
@@ -3065,6 +3077,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     if (idx === tabs.length - 1) { $("#next").textContent = "Save & close"; $("#next").onclick = saveClose; }
     const pane = $("#pane");
     const banner = reviewBanner(cur); if (banner) pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0">${banner}</div>`);
+    if (curTab === "hdr" && tw && tw.lat != null) { pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><button class="btn" id="navT">🧭 Directions to ${esc(tw.id)}</button></div>`); $("#navT").onclick = () => openDirections(tw); }
     if (curTab === "hdr") genHeader(pane, def, tw);
     else if (/^g\d+$/.test(curTab)) genGrid(pane, def, +curTab.slice(1));
     else if (curTab === "ph") panePhotos(pane, def);
