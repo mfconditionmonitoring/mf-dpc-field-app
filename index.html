@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.4.1";
+  const APP_VERSION = "1.4.3";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2379,7 +2379,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <div id="ntinfo" class="muted" style="margin-top:6px"></div>
         <div class="row" style="margin-top:12px"><button class="btn pri grow" id="start">Start inspection</button><button class="btn" id="near">Nearest tower</button><button class="btn" id="navgo">🧭 Directions</button></div>
       </div>
-      <div class="card"><h2>On this phone</h2><div class="list" id="mine"></div><div id="space"></div></div>
+      <div class="card"><h2>On this phone</h2><button class="btn pri" id="sendNow" style="width:100%;margin:4px 0 10px">⬆ Send now</button><div class="list" id="mine"></div><div id="space"></div></div>
       ${isLead() ? `<div class="card"><h2>Team inspections</h2><div class="list" id="team"></div></div>` : ""}
       <p class="ver">Version ${APP_VERSION}</p>`;
     const norm = (v) => { v = (v || "").trim().toUpperCase(); if (/^\d+$/.test(v)) return "T" + v.padStart(3, "0"); return v; };
@@ -2405,13 +2405,19 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       if (!t) return toast("Type a tower number (e.g. 145) or tap Nearest tower first.");
       openDirections(t);
     };
+    $("#sendNow") && ($("#sendNow").onclick = async () => { if (!navigator.onLine) return modal("No signal", "This phone has no internet now. Move to Wi-Fi or mobile data, then tap Send now again. Your work is safe on the phone until then."); const _b = $("#sendNow"); _b.disabled = true; const _t = _b.textContent; _b.textContent = "Sending…"; try { await syncNow(true); } catch (e) {} _b.textContent = _t; _b.disabled = false; updateSyncBadge(); });
     $("#near").onclick = () => {
       if (!fix) return toast("No GPS fix yet – wait a moment outdoors.");
       if (isAssetForm($("#nf").value)) { let b = null; assetList($("#nf").value).forEach((a) => { const d = towerDist(a); if (d != null && (b == null || d < b.d)) b = { a, d }; }); if (!b) return toast("No GPS position for these items."); $("#nt").value = b.a.id; $("#nt").oninput(); return toast("Nearest: " + b.a.id + " (" + b.d + " m)"); }
       let best = null; TOWERS.forEach((t) => { if (t.group === "G") return; const d = towerDist(t); if (best == null || d < best.d) best = { t, d }; });
       $("#nt").value = best.t.id; $("#nt").oninput(); toast("Nearest: " + best.t.id + " (" + best.d + " m)");
     };
+    let _starting = false;
     $("#start").onclick = async () => {
+      if (_starting) return; _starting = true;
+      { const _sb = $("#start"); if (_sb) _sb.disabled = true; }
+      try {
+      const all = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
       const form = $("#nf").value;
       if (isAssetForm(form)) {
         const aid = $("#nt").value.trim().toUpperCase(); if (!structOf(form, aid)) return toast("Pick an item from the list.");
@@ -2431,6 +2437,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       const p = stampNew(isLog(form) ? await newLogRow(form, id) : isGen(form) ? newGeneric(form, id) : newInspection(form, id), why);
       await dbPut("insp", p);
       openInsp(p.id);
+      } finally { _starting = false; const _b = $("#start"); if (_b) _b.disabled = false; }
     };
     renderDash(all); renderNext(all); renderMine(all); if (isLead()) renderTeam(all);
     nextTimer = setInterval(async () => { if (view !== "home") return clearInterval(nextTimer); renderNext(await dbAll("insp")); }, 20000);
