@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.4.4";
+  const APP_VERSION = "1.5.0";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2310,17 +2310,20 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       const r = await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ action: "beat", user: u.id, auth: u.secret, device: settings.device || "", lat: fix && fix.lat, lon: fix && fix.lon, acc: fix && fix.acc, batt: await battPct() }) });
       const j = await r.json();
-      if (j && j.ok && j.call) showIncomingCall(j.call); else hideRing();
+      // v1.5.0: calls ring through the built-in team call (MFCall) – the old Meet ring is retired
     } catch (e) {}
   }
-  async function callChief() {
+  /** v1.5.0: Call Chief rings the office engine (or the Chief's own phone) inside this app – no Meet, no WhatsApp. */
+  async function callChief(video) {
     const u = signer(); if (!u) return toast("Sign in first.");
-    window.open(CALL_LINE, "_blank");
+    const on = MFCall.online().filter((p) => p.online);
+    const t = on.find((p) => p.id === "ENG-HQ") || on.find((p) => p.role === "engineer") || null;
+    if (t) return MFCall.call(t.id, t.id === "ENG-HQ" ? "Chief (office)" : t.name, !!video);
     try {
       await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ action: "callchief", user: u.id, auth: u.secret, device: settings.device || "", lat: fix && fix.lat, lon: fix && fix.lon, acc: fix && fix.acc, batt: await battPct() }) });
-      toast("Calling Chief - the office has your location.");
-    } catch (e) { toast("Call line opened. No signal, so the office was not alerted - stay on the line."); }
+      toast("The Chief is not online right now. He has been sent an alert with your location.", 5000);
+    } catch (e) { toast("No signal – the Chief could not be reached. Try again when you have coverage.", 5000); }
   }
   function showIncomingCall(call) {
     if (document.getElementById("ringOv") && call.ts === _lastCallTs) return;
@@ -2412,7 +2415,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     $("#title").textContent = "Round " + settings.round;
     $("#back").classList.add("hide");
     app().innerHTML = `<section class="dash" id="dash"></section><div class="card next" id="nextCard"></div>
-      <div class="card" style="border:2px solid #0E5A73;background:#f2fbfe"><button class="btn pri" id="callChief" style="width:100%;font-size:17px;padding:14px">📞 Call Chief</button><div class="muted" style="margin-top:6px;text-align:center">Opens the team call line and alerts the Chief with your location</div></div>
+      <div class="card" style="border:2px solid #0E5A73;background:#f2fbfe"><div class="row" style="gap:8px"><button class="btn pri grow" id="callChief" style="font-size:17px;padding:14px">📞 Call Chief</button><button class="btn grow" id="videoChief" style="font-size:17px;padding:14px">🎥 Video</button></div>
+        <h2 style="margin:14px 0 4px">Team – call each other</h2><div id="teamCalls"></div></div>
       <div class="card"><h2>Start an inspection</h2>
         <label class="f">Form</label>
         <select id="nf"><option value="${esc(settings.option)}">${esc(FORM_TITLE[settings.option])}</option><option value="CHK-10">${FORM_TITLE["CHK-10"]}</option><option value="CHK-02">CHK-02 Thermography – structure row</option><option value="CHK-04">CHK-04 Corona / PD – structure row</option><option value="CHK-06">CHK-06 Night patrol – structure row</option>${REGISTRY.filter((e) => e.scope === "asset" && DEFS[e.id]).map((e) => `<option value="${esc(e.id)}">${esc(e.code + " " + e.title)}</option>`).join("")}</select>
@@ -2448,7 +2452,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       if (!t) return toast("Type a tower number (e.g. 145) or tap Nearest tower first.");
       openDirections(t);
     };
-    $("#callChief") && ($("#callChief").onclick = callChief);
+    $("#callChief") && ($("#callChief").onclick = () => callChief(false)); $("#videoChief") && ($("#videoChief").onclick = () => callChief(true));
+    if ($("#teamCalls")) MFCall.panel($("#teamCalls"));
     $("#sendNow") && ($("#sendNow").onclick = async () => { if (!navigator.onLine) return modal("No signal", "This phone has no internet now. Move to Wi-Fi or mobile data, then tap Send now again. Your work is safe on the phone until then."); const _b = $("#sendNow"); _b.disabled = true; const _t = _b.textContent; _b.textContent = "Sending…"; try { await syncNow(true); } catch (e) {} _b.textContent = _t; _b.disabled = false; updateSyncBadge(); });
     $("#near").onclick = () => {
       if (!fix) return toast("No GPS fix yet – wait a moment outdoors.");
@@ -3877,6 +3882,10 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     window.addEventListener("offline", () => { updateSyncBadge(); if (view === "home") home(); });
     setInterval(() => syncNow(false), 60000);
     setInterval(beat, 25000); beat();
+    // v1.5.0 built-in team calls (peer-to-peer). The phone uses the back camera first, so the Chief sees the equipment.
+    MFCall.init({ post: async (b) => (await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(b) })).json(),
+      auth: () => { const u = signer(); return u ? { user: u.id, auth: u.secret, device: settings.device || "" } : {}; },
+      ready: () => !!(signer() && settings.endpoint && navigator.onLine), toast: (m) => toast(m, 4500), facing: "environment" });
     document.addEventListener("visibilitychange", () => { if (!document.hidden) beat(); });
     setInterval(() => loadConfig().then(() => { if (view === "home") home(); }), 300000);
     await loadConfig();
@@ -3884,5 +3893,223 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   window.addEventListener("load", start);
 })();
+</script>
+<script>
+/* ===================== MF team calls – peer-to-peer voice / video (WebRTC) – 09-Nov-2026 =====================
+   Voice and video go straight from device to device. The MF cloud inbox only passes the short "ring" messages
+   (offer / answer / hang-up). Same code in the field app and in the processing engine.
+   MFCall.init({ post, auth, ready, toast, facing, selfId })  ·  MFCall.call(id, name, video)  ·  MFCall.online()  */
+const MFCall = (() => {
+  let O = null, pc = null, local = null, st = "idle", peer = null, callId = "", isVideo = false, pendingOffer = null;
+  let pollT = null, online = [], turn = null, ctx = null, toneT = null, missT = null, wake = null, t0 = 0, clockT = null, facing = "user", lastErr = "";
+  const listeners = [];
+  const STUN = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"] }];
+  const ice = () => STUN.concat(turn ? [].concat(turn) : []);
+  const $id = (i) => document.getElementById(i);
+  const escH = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const toast = (m) => { try { (O && O.toast ? O.toast : alert)(m); } catch (e) {} };
+
+  function init(opts) {
+    O = opts; facing = opts.facing || "user";
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, unlockAudio, { passive: true }));
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) schedule(300); });
+    window.addEventListener("online", () => schedule(300));
+    window.addEventListener("beforeunload", () => { if (peer && st !== "idle") send(peer.id, { type: "hangup", callId }).catch(() => {}); });
+    css(); schedule(1500);
+  }
+  function unlockAudio() { try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === "suspended") ctx.resume(); } catch (e) {} }
+  function schedule(ms) { clearTimeout(pollT); pollT = setTimeout(poll, ms); }
+  const every = () => (st === "calling" || st === "connecting" ? 1500 : st === "incall" ? 4000 : st === "ringing" ? 3000 : document.hidden ? 12000 : 5000);
+
+  async function rtc(op, extra) {
+    const body = Object.assign({ action: "rtc", op, busy: st !== "idle" }, O.auth() || {}, extra || {});
+    const j = await O.post(body);
+    if (!j || !j.ok) throw new Error((j && j.error) || "no answer from the cloud");
+    if ("turn" in j) turn = j.turn; online = j.online || []; lastErr = "";
+    for (let i = listeners.length - 1; i >= 0; i--) { try { if (listeners[i](online) === false) listeners.splice(i, 1); } catch (e) {} }
+    return j;
+  }
+  async function poll() {
+    try { if (O && O.ready()) { const j = await rtc("poll"); for (const m of j.inbox || []) await handle(m); } }
+    catch (e) { lastErr = e.message; listeners.forEach((f) => { try { f(online, e.message); } catch (x) {} }); }
+    schedule(every());
+  }
+  const send = (to, msg) => rtc("send", { to, msg });
+
+  async function handle(m) {
+    if (m.type === "offer") {
+      if (st !== "idle") { send(m.from, { type: "busy", callId: m.callId }).catch(() => {}); return; }
+      st = "ringing"; peer = { id: m.from, name: m.fromName || m.from }; callId = m.callId; isVideo = !!m.video; pendingOffer = m.sdp;
+      ringUI(); tone("ring"); notify(peer.name + " is calling" + (isVideo ? " (video)" : ""));
+      clearTimeout(missT); missT = setTimeout(() => { if (st === "ringing") end("Missed call from " + peer.name, false); }, 45000);
+      return;
+    }
+    if (m.callId !== callId) return;
+    if (m.type === "answer" && st === "calling") {
+      clearTimeout(missT); stopTone(); st = "connecting"; ui("Connecting …");
+      try { await pc.setRemoteDescription({ type: "answer", sdp: m.sdp }); } catch (e) { end("Call failed: " + e.message, true); }
+    } else if (m.type === "hangup") end((peer ? peer.name : "The other side") + " ended the call.", false);
+    else if (m.type === "decline") end((peer ? peer.name : "They") + " declined the call.", false);
+    else if (m.type === "busy") end((peer ? peer.name : "They") + " is on another call.", false);
+  }
+
+  function gathered(p) {
+    return new Promise((res) => {
+      if (p.iceGatheringState === "complete") return res();
+      const t = setTimeout(res, 3500);
+      p.addEventListener("icegatheringstatechange", () => { if (p.iceGatheringState === "complete") { clearTimeout(t); res(); } });
+    });
+  }
+  async function media(video) {
+    return navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: video ? { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 20 } } : false,
+    });
+  }
+  function makePC() {
+    const p = new RTCPeerConnection({ iceServers: ice(), iceCandidatePoolSize: 2 });
+    p.ontrack = (e) => { const v = $id("mfcRemote"); if (v && v.srcObject !== e.streams[0]) { v.srcObject = e.streams[0]; v.play().catch(() => {}); } };
+    p.onconnectionstatechange = () => {
+      const s = p.connectionState; if (pc !== p) return;
+      if (s === "connected") { st = "incall"; t0 = Date.now(); clearInterval(clockT); clockT = setInterval(tick, 1000); ui(""); capBitrate(p); }
+      else if (s === "failed") end(turn ? "The call could not connect – the network is too weak." : "The call could not connect directly on this network. A relay server needs to be added (see the engine Team & Calls tab).", true);
+      else if (s === "disconnected") setTimeout(() => { if (pc === p && p.connectionState === "disconnected") end("Call dropped – signal lost.", true); }, 9000);
+    };
+    return p;
+  }
+  function capBitrate(p) { try { p.getSenders().forEach((s) => { if (s.track && s.track.kind === "video") { const pr = s.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}]; pr.encodings[0].maxBitrate = 450000; s.setParameters(pr).catch(() => {}); } }); } catch (e) {} }
+
+  async function call(to, name, video) {
+    if (st !== "idle") return toast("You are already in a call.");
+    if (!navigator.onLine) return toast("No signal – the call cannot be made now.");
+    if (!O.ready()) return toast("Sign in first.");
+    unlockAudio(); peer = { id: to, name: name || to }; isVideo = !!video; callId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    st = "calling"; ui("Calling " + peer.name + " …");
+    try { local = await media(isVideo); } catch (e) { st = "idle"; hideUI(); return toast((isVideo ? "Camera or microphone" : "Microphone") + " not allowed on this device: " + e.message); }
+    pc = makePC(); local.getTracks().forEach((t) => pc.addTrack(t, local)); showLocal();
+    try {
+      await pc.setLocalDescription(await pc.createOffer()); await gathered(pc);
+      await send(to, { type: "offer", callId, sdp: pc.localDescription.sdp, video: isVideo });
+    } catch (e) { return end("Call not sent: " + e.message, false); }
+    tone("back"); wakeOn();
+    clearTimeout(missT); missT = setTimeout(() => { if (st === "calling") end(peer.name + " did not answer.", true); }, 45000);
+    schedule(1200);
+  }
+  async function answer(withVideo) {
+    if (st !== "ringing") return;
+    clearTimeout(missT); stopTone(); st = "connecting"; ui("Connecting …"); wakeOn();
+    try { local = await media(withVideo); } catch (e) { try { local = await media(false); } catch (e2) { send(peer.id, { type: "decline", callId }).catch(() => {}); return end("Microphone not allowed on this device.", false); } }
+    pc = makePC(); local.getTracks().forEach((t) => pc.addTrack(t, local)); showLocal();
+    try {
+      await pc.setRemoteDescription({ type: "offer", sdp: pendingOffer });
+      await pc.setLocalDescription(await pc.createAnswer()); await gathered(pc);
+      await send(peer.id, { type: "answer", callId, sdp: pc.localDescription.sdp });
+    } catch (e) { return end("Could not answer: " + e.message, true); }
+    clearTimeout(missT); missT = setTimeout(() => { if (st === "connecting") end("The call could not connect on this network.", true); }, 30000);
+    schedule(1500);
+  }
+  function decline() { if (st !== "ringing") return; send(peer.id, { type: "decline", callId }).catch(() => {}); end("", false); }
+  function end(msg, tell) {
+    if (tell && peer && st !== "idle") send(peer.id, { type: "hangup", callId }).catch(() => {});
+    clearTimeout(missT); clearInterval(clockT); stopTone();
+    try { if (pc) { pc.ontrack = null; pc.onconnectionstatechange = null; pc.close(); } } catch (e) {}
+    try { if (local) local.getTracks().forEach((t) => t.stop()); } catch (e) {}
+    pc = null; local = null; st = "idle"; pendingOffer = null; hideUI(); wakeOff();
+    if (msg) toast(msg); schedule(1500);
+  }
+  function hangup() { end("Call ended.", true); }
+  function mute() { if (!local) return; const a = local.getAudioTracks()[0]; if (a) { a.enabled = !a.enabled; btnState("mfcMute", !a.enabled, a.enabled ? "🎤 Mute" : "🔇 Unmute"); } }
+  function camOnOff() { if (!local) return; const v = local.getVideoTracks()[0]; if (v) { v.enabled = !v.enabled; btnState("mfcCam", !v.enabled, v.enabled ? "📷 Camera off" : "📷 Camera on"); } }
+  async function flip() {
+    if (!local || !pc) return; const old = local.getVideoTracks()[0]; if (!old) return;
+    facing = facing === "user" ? "environment" : "user";
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 20 } } });
+      const nt = s.getVideoTracks()[0], snd = pc.getSenders().find((x) => x.track && x.track.kind === "video");
+      if (snd) await snd.replaceTrack(nt); local.removeTrack(old); old.stop(); local.addTrack(nt); showLocal(); capBitrate(pc);
+    } catch (e) { toast("Could not switch camera: " + e.message); }
+  }
+  function tick() { const el = $id("mfcClock"); if (el && t0) { const s = Math.floor((Date.now() - t0) / 1000); el.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); } }
+
+  /* ---------- sound, vibration, notice ---------- */
+  function beep(f1, f2, ms) {
+    try { unlockAudio(); if (!ctx) return; const o = ctx.createOscillator(), g = ctx.createGain(); o.type = "sine"; o.frequency.value = f1;
+      if (f2) o.frequency.setValueAtTime(f2, ctx.currentTime + ms / 2000); g.gain.value = 0.22; o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + ms / 1000); } catch (e) {}
+  }
+  function tone(kind) {
+    stopTone();
+    const play = () => { if (kind === "ring") { beep(880, 660, 700); setTimeout(() => beep(880, 660, 700), 900); try { navigator.vibrate && navigator.vibrate([600, 300, 600]); } catch (e) {} } else beep(425, 0, 900); };
+    play(); toneT = setInterval(play, kind === "ring" ? 2600 : 3500);
+  }
+  function stopTone() { clearInterval(toneT); toneT = null; try { navigator.vibrate && navigator.vibrate(0); } catch (e) {} }
+  function notify(text) {
+    try { if (document.hidden && "Notification" in window && Notification.permission === "granted") { const n = new Notification("MF team call", { body: text, requireInteraction: true }); n.onclick = () => { window.focus(); n.close(); }; } } catch (e) {}
+    const t0 = document.title; let k = 0; const fl = setInterval(() => { if (st !== "ringing") { document.title = t0; return clearInterval(fl); } document.title = (k++ % 2 ? "📞 " + text : t0); }, 1000);
+  }
+  async function wakeOn() { try { if (navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); } catch (e) {} }
+  function wakeOff() { try { if (wake) wake.release(); } catch (e) {} wake = null; }
+
+  /* ---------- screen ---------- */
+  function css() {
+    if ($id("mfcCss")) return;
+    const s = document.createElement("style"); s.id = "mfcCss";
+    s.textContent = `#mfcOv{position:fixed;inset:0;z-index:2147483000;background:#0b2f3c;color:#fff;display:flex;flex-direction:column;font:16px system-ui,Segoe UI,Roboto,Arial,sans-serif}
+#mfcOv .hd{padding:16px 18px 6px;text-align:center}#mfcOv .nm{font-size:26px;font-weight:700}#mfcOv .sb{opacity:.85;margin-top:4px;min-height:20px}
+#mfcOv .stage{flex:1;position:relative;background:#06202a;overflow:hidden}#mfcRemote{width:100%;height:100%;object-fit:contain;background:#06202a}
+#mfcLocal{position:absolute;right:10px;bottom:10px;width:28%;max-width:180px;border-radius:10px;border:2px solid #fff;background:#000;object-fit:cover}
+#mfcOv .bar{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;padding:14px}#mfcOv .bar button{font-size:17px;padding:13px 18px;border:0;border-radius:12px;background:#ffffff22;color:#fff;min-width:110px}
+#mfcOv .bar button.on{background:#F39C12}#mfcOv .bar .red{background:#c62828}#mfcOv .bar .grn{background:#1e8e3e}
+#mfcOv.ring .stage{display:flex;align-items:center;justify-content:center;font-size:72px}
+.mfcList .row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #e3e9ec}.mfcList .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+.mfcList button{padding:8px 12px;border-radius:9px;border:1px solid #0E5A73;background:#fff;color:#0E5A73;font-weight:600}.mfcList button.v{background:#0E5A73;color:#fff}`;
+    document.head.appendChild(s);
+  }
+  function shell(cls) {
+    let ov = $id("mfcOv"); if (!ov) { ov = document.createElement("div"); ov.id = "mfcOv"; document.body.appendChild(ov); }
+    ov.className = cls || ""; return ov;
+  }
+  function ringUI() {
+    const ov = shell("ring");
+    ov.innerHTML = `<div class="hd"><div class="sb">Incoming ${isVideo ? "video" : "voice"} call</div><div class="nm">${escH(peer.name)}</div></div>
+      <div class="stage">📞</div>
+      <div class="bar"><button class="grn" id="mfcAns">📞 Answer</button>${isVideo ? '<button class="grn" id="mfcAnsV">🎥 Answer with video</button>' : ""}<button class="red" id="mfcDec">Decline</button></div>`;
+    $id("mfcAns").onclick = () => answer(false); if ($id("mfcAnsV")) $id("mfcAnsV").onclick = () => answer(true); $id("mfcDec").onclick = decline;
+  }
+  function ui(sub) {
+    let ov = $id("mfcOv");
+    if (!ov || ov.className === "ring" || !$id("mfcRemote")) {
+      ov = shell("");
+      ov.innerHTML = `<div class="hd"><div class="nm">${escH(peer ? peer.name : "")}</div><div class="sb"><span id="mfcSub"></span> <span id="mfcClock"></span></div></div>
+        <div class="stage"><video id="mfcRemote" autoplay playsinline></video><video id="mfcLocal" autoplay playsinline muted></video></div>
+        <div class="bar"><button id="mfcMute">🎤 Mute</button>${isVideo ? '<button id="mfcCam">📷 Camera off</button><button id="mfcFlip">🔄 Switch camera</button>' : '<button id="mfcAddV">🎥 Video</button>'}<button class="red" id="mfcEnd">⏹ End call</button></div>`;
+      $id("mfcMute").onclick = mute; $id("mfcEnd").onclick = hangup;
+      if ($id("mfcCam")) $id("mfcCam").onclick = camOnOff; if ($id("mfcFlip")) $id("mfcFlip").onclick = flip;
+      if ($id("mfcAddV")) $id("mfcAddV").onclick = () => toast("This is a voice call. End it and press Video to call with the camera.");
+    }
+    const s = $id("mfcSub"); if (s && sub != null) s.textContent = sub;
+    if (st !== "incall") { const c = $id("mfcClock"); if (c) c.textContent = ""; }
+  }
+  function showLocal() { const v = $id("mfcLocal"); if (!v) return; if (local && local.getVideoTracks().length) { v.srcObject = local; v.style.display = ""; v.play().catch(() => {}); } else v.style.display = "none"; }
+  function btnState(id, on, label) { const b = $id(id); if (b) { b.classList.toggle("on", on); b.textContent = label; } }
+  function hideUI() { const ov = $id("mfcOv"); if (ov) ov.remove(); }
+
+  /** A ready-made "who is online" list with Voice / Video buttons. */
+  function panel(el, opts) {
+    opts = opts || {};
+    const draw = (list, err) => {
+      if (!el || !document.body.contains(el)) return false;
+      const on = (list || []).filter((p) => p.online && (!opts.filter || opts.filter(p))).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      const off = (list || []).filter((p) => !p.online && p.seconds < 6 * 3600 && (!opts.filter || opts.filter(p)));
+      const row = (p, live) => `<div class="row"><span class="dot" style="background:${live ? (p.busy ? "#F39C12" : "#1e8e3e") : "#b0bec5"}"></span><b style="flex:1">${escH(p.name)}</b><span class="muted" style="font-size:12px">${live ? (p.busy ? "on a call" : "online") : "last seen " + Math.round(p.seconds / 60) + " min ago"}</span>
+        ${live ? `<button data-c="${escH(p.id)}" data-n="${escH(p.name)}">📞 Voice</button><button class="v" data-c="${escH(p.id)}" data-n="${escH(p.name)}" data-v="1">🎥 Video</button>` : ""}</div>`;
+      el.innerHTML = `<div class="mfcList">${on.length ? on.map((p) => row(p, true)).join("") : '<p class="muted">Nobody else has the app open right now.</p>'}${off.map((p) => row(p, false)).join("")}</div>` +
+        (err ? `<p class="muted" style="color:#c62828">Calls: ${escH(err)}</p>` : "");
+      el.querySelectorAll("button[data-c]").forEach((b) => (b.onclick = () => call(b.dataset.c, b.dataset.n, !!b.dataset.v)));
+    };
+    listeners.push(draw); draw(online);
+  }
+  return { init, call, hangup, panel, online: () => online, state: () => st, onChange: (f) => listeners.push(f), lastError: () => lastErr, poll: () => schedule(0) };
+})();
+
 </script>
 </body></html>
