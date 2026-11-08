@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MF-DPC-132 · Team board</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  :root { --teal:#0E5A73; --live:#1a8f3c; --recent:#c58b00; --stale:#b00020; --ink:#10242b; --line:#dfe7ea; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:var(--ink); background:#f4f7f8; }
+  header { background:var(--teal); color:#fff; padding:12px 16px; display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:10; }
+  header h1 { font-size:16px; margin:0; font-weight:700; }
+  header .sp { flex:1 }
+  header button { background:rgba(255,255,255,.15); color:#fff; border:0; border-radius:8px; padding:7px 12px; font-size:13px; cursor:pointer; }
+  .wrap { max-width:980px; margin:0 auto; padding:14px; }
+  .calling { background:var(--stale); color:#fff; border-radius:12px; padding:14px 16px; margin-bottom:14px; animation:pulse 1.1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.78} }
+  .calling b { font-size:17px; }
+  .calling a.join { display:inline-block; background:#fff; color:var(--stale); font-weight:700; text-decoration:none; padding:8px 16px; border-radius:8px; margin-top:8px; }
+  .calling a.map { color:#fff; }
+  #map { height:300px; border-radius:12px; margin-bottom:14px; border:1px solid var(--line); background:#e9eef0; }
+  table { width:100%; border-collapse:collapse; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  th,td { text-align:left; padding:11px 12px; font-size:14px; border-bottom:1px solid var(--line); }
+  th { background:#eef3f4; font-size:12px; text-transform:uppercase; letter-spacing:.03em; color:#56707a; }
+  tr:last-child td { border-bottom:0; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; vertical-align:middle; }
+  .d-live{background:var(--live)} .d-recent{background:var(--recent)} .d-stale{background:var(--stale)}
+  .tag { font-size:11px; color:#56707a; }
+  .seen-live{color:var(--live);font-weight:600} .seen-recent{color:var(--recent);font-weight:600} .seen-stale{color:var(--stale);font-weight:700}
+  .call { background:var(--teal); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  .batt { font-variant-numeric:tabular-nums; }
+  a.loc { color:var(--teal); text-decoration:none; }
+  .muted { color:#6b828b; font-size:13px; }
+  .empty { background:#fff; border-radius:12px; padding:34px; text-align:center; color:#6b828b; }
+  .foot { margin:14px 2px; font-size:12px; color:#80929c; }
+  /* settings dialog */
+  .ov { position:fixed; inset:0; background:rgba(10,30,36,.55); display:flex; align-items:center; justify-content:center; padding:18px; z-index:50; }
+  .card { background:#fff; border-radius:14px; padding:20px; width:100%; max-width:440px; }
+  .card h2 { margin:0 0 4px; font-size:17px; }
+  .card label { display:block; font-size:13px; color:#56707a; margin:12px 0 4px; }
+  .card input { width:100%; padding:11px 12px; font-size:15px; border:1px solid #c7d2d6; border-radius:9px; }
+  .card .go { width:100%; margin-top:16px; background:var(--teal); color:#fff; border:0; border-radius:9px; padding:13px; font-size:15px; font-weight:600; cursor:pointer; }
+  .card .err { color:var(--stale); font-size:13px; margin-top:10px; min-height:16px; }
+  .pill { font-size:11px; background:#eef3f4; color:#56707a; border-radius:10px; padding:2px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MF-DPC-132 · Team board</h1>
+  <span class="pill" id="stat">connecting…</span>
+  <span class="sp"></span>
+  <button id="refresh">Refresh</button>
+  <button id="settings">⚙</button>
+</header>
+
+<div class="wrap">
+  <div id="callingBox"></div>
+  <div id="map"></div>
+  <div id="list"></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  "use strict";
+  var DEFAULT_ENDPOINT = "https://script.google.com/macros/s/AKfycbxuPdXOYLwRY085kDTyEg6QP6jVAPlGdMjYBS2CX2f06pFBCFuBhNXP_mluxZv_DEvfUA/exec";
+  var cfg = null, map = null, markers = {}, timer = null, lastCalling = "";
+  var $ = function (s) { return document.querySelector(s); };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); }
+  function loadCfg() { try { return JSON.parse(localStorage.getItem("mfboard") || "null"); } catch (e) { return null; } }
+  function saveCfg(c) { localStorage.setItem("mfboard", JSON.stringify(c)); }
+
+  function settingsView(err) {
+    var c = cfg || { endpoint: DEFAULT_ENDPOINT, engine: "ENG-HQ", ekey: "" };
+    var ov = document.createElement("div"); ov.className = "ov"; ov.id = "ov";
+    ov.innerHTML =
+      '<div class="card"><h2>Connect the board</h2>' +
+      '<div class="muted">Use your office engine key. It is kept only in this browser.</div>' +
+      '<label>Office link (upload address)</label><input id="s_ep" value="' + esc(c.endpoint) + '">' +
+      '<label>Engine ID</label><input id="s_eng" value="' + esc(c.engine) + '" autocapitalize="characters">' +
+      '<label>Engine key</label><input id="s_key" value="' + esc(c.ekey) + '" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" autocapitalize="characters">' +
+      '<button class="go" id="s_go">Connect</button>' +
+      '<div class="err" id="s_err">' + (err ? esc(err) : "") + '</div></div>';
+    document.body.appendChild(ov);
+    $("#s_go").onclick = function () {
+      var n = { endpoint: $("#s_ep").value.trim(), engine: $("#s_eng").value.trim().toUpperCase(), ekey: $("#s_key").value.trim().toUpperCase() };
+      if (!n.endpoint || !n.engine || n.ekey.replace(/[\s-]/g, "").length < 12) { $("#s_err").textContent = "Fill in all three fields."; return; }
+      $("#s_err").textContent = "Checking…";
+      post(n, { action: "presence" }).then(function (j) {
+        if (!j.ok) throw new Error(j.error || "refused");
+        cfg = n; saveCfg(cfg); ov.remove(); start();
+      }).catch(function (e) { $("#s_err").textContent = "Not connected: " + e.message; });
+    };
+  }
+
+  function post(c, body) {
+    var b = Object.assign({ engine: c.engine, ekey: c.ekey }, body);
+    return fetch(c.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(b) })
+      .then(function (r) { return r.json(); });
+  }
+
+  function seenClass(sec) { return sec <= 120 ? "live" : sec <= 600 ? "recent" : "stale"; }
+  function seenText(sec) {
+    if (sec <= 90) return "live";
+    if (sec < 3600) return Math.round(sec / 60) + " min ago";
+    return Math.round(sec / 3600) + " h ago";
+  }
+
+  function ensureMap() {
+    if (map || typeof L === "undefined") return;
+    map = L.map("map", { zoomControl: true, attributionControl: false });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+    map.setView([20.4, 57.6], 9);
+  }
+
+  function drawMap(online) {
+    ensureMap(); if (!map) return;
+    Object.keys(markers).forEach(function (id) { map.removeLayer(markers[id]); delete markers[id]; });
+    var pts = [];
+    online.forEach(function (e) {
+      if (e.lat == null || e.lon == null) return;
+      var col = e.stale ? "#b00020" : (e.seconds <= 120 ? "#1a8f3c" : "#c58b00");
+      var m = L.circleMarker([e.lat, e.lon], { radius: 9, color: "#fff", weight: 2, fillColor: col, fillOpacity: 1 }).addTo(map);
+      m.bindPopup("<b>" + esc(e.name) + "</b> (" + esc(e.id) + ")<br>" + seenText(e.seconds) + (e.stale ? " · STALE" : "") +
+        "<br><a href='https://maps.google.com/?q=" + e.lat + "," + e.lon + "' target='_blank'>open in maps</a>");
+      markers[e.id] = m; pts.push([e.lat, e.lon]);
+    });
+    if (pts.length === 1) map.setView(pts[0], 14);
+    else if (pts.length > 1) map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 });
+  }
+
+  function render(j) {
+    var online = j.online || [], calling = j.calling || [];
+    // calling banner
+    var sig = calling.map(function (e) { return e.id + e.seconds; }).join(",");
+    var box = $("#callingBox");
+    if (calling.length) {
+      box.innerHTML = calling.map(function (e) {
+        var loc = (e.lat != null) ? ' · <a class="map" href="https://maps.google.com/?q=' + e.lat + ',' + e.lon + '" target="_blank">location</a>' : " · location not sent";
+        return '<div class="calling"><b>' + esc(e.name) + " (" + esc(e.id) + ") is calling you</b>" + loc +
+          '<br><a class="join" href="' + esc(j.meet || "https://meet.google.com/sbi-dasn-rvt") + '" target="_blank">Join the call line</a></div>';
+      }).join("");
+      if (sig !== lastCalling) { try { beep(); } catch (e) {} lastCalling = sig; }
+    } else { box.innerHTML = ""; lastCalling = ""; }
+
+    // table
+    if (!online.length) {
+      $("#list").innerHTML = '<div class="empty">No one signed in and online right now.<br><span class="muted">People appear here while their phone app is open with signal.</span></div>';
+    } else {
+      var rows = online.map(function (e) {
+        var sc = seenClass(e.seconds);
+        var gps = (e.lat != null) ? '<a class="loc" href="https://maps.google.com/?q=' + e.lat + "," + e.lon + '" target="_blank">' + e.lat.toFixed(4) + ", " + e.lon.toFixed(4) + (e.acc ? " ±" + Math.round(e.acc) + "m" : "") + "</a>" : '<span class="muted">—</span>';
+        var batt = (e.batt != null) ? '<span class="batt">' + e.batt + "%</span>" : '<span class="muted">—</span>';
+        return "<tr>" +
+          "<td><span class='dot d-" + sc + "'></span><b>" + esc(e.name) + "</b><div class='tag'>" + esc(e.id) + " · " + esc(e.role || "") + "</div></td>" +
+          "<td class='seen-" + sc + "'>" + seenText(e.seconds) + (e.stale ? "<div class='tag'>no ping 10 min+</div>" : "") + "</td>" +
+          "<td>" + batt + "</td>" +
+          "<td>" + gps + "</td>" +
+          "<td><button class='call' data-id='" + esc(e.id) + "' data-name='" + esc(e.name) + "'>Call</button></td>" +
+          "</tr>";
+      }).join("");
+      $("#list").innerHTML = "<table><thead><tr><th>Person</th><th>Last ping</th><th>Battery</th><th>Location</th><th></th></tr></thead><tbody>" + rows + "</tbody></table>";
+      Array.prototype.forEach.call(document.querySelectorAll(".call"), function (btn) {
+        btn.onclick = function () { ringPhone(btn.dataset.id, btn.dataset.name, btn); };
+      });
+    }
+    drawMap(online);
+    $("#stat").textContent = "live · " + online.length + " online";
+    $("#foot").textContent = "Updated " + new Date().toLocaleTimeString() + " · green ≤2 min, amber ≤10 min, red = no ping 10 min+ (app closed / off / no signal). Call line: " + (j.meet || "");
+  }
+
+  function ringPhone(id, name, btn) {
+    if (!cfg) return;
+    btn.disabled = true; var t = btn.textContent; btn.textContent = "Ringing…";
+    post(cfg, { action: "call", to: id }).then(function (j) {
+      btn.textContent = j.ok ? "Rang ✓" : "Failed";
+      if (j.ok) window.open(j.url || "https://meet.google.com/sbi-dasn-rvt", "_blank");
+      setTimeout(function () { btn.textContent = t; btn.disabled = false; }, 2500);
+    }).catch(function () { btn.textContent = "Failed"; setTimeout(function () { btn.textContent = t; btn.disabled = false; }, 2500); });
+  }
+
+  var actx = null;
+  function beep() {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.5].forEach(function (t) {
+      var o = actx.createOscillator(), g = actx.createGain();
+      o.type = "sine"; o.frequency.value = 880; o.connect(g); g.connect(actx.destination);
+      g.gain.setValueAtTime(0.0001, actx.currentTime + t); g.gain.exponentialRampToValueAtTime(0.25, actx.currentTime + t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + t + 0.35);
+      o.start(actx.currentTime + t); o.stop(actx.currentTime + t + 0.36);
+    });
+  }
+
+  function tick() {
+    if (!cfg) return;
+    post(cfg, { action: "presence" }).then(function (j) {
+      if (!j.ok) { $("#stat").textContent = "error"; if (/authoris|key|engine/i.test(j.error || "")) { stop(); settingsView(j.error); } return; }
+      render(j);
+    }).catch(function () { $("#stat").textContent = "offline"; });
+  }
+
+  function start() { stop(); tick(); timer = setInterval(tick, 12000); }
+  function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+  $("#refresh").onclick = tick;
+  $("#settings").onclick = function () { settingsView(); };
+
+  cfg = loadCfg();
+  if (cfg && cfg.ekey) start(); else settingsView();
+})();
+</script>
+</body>
+</html>

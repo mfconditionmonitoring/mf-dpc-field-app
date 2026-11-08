@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.4.3";
+  const APP_VERSION = "1.4.4";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2155,6 +2155,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const dbKeys = (st) => tx(st, "readonly", (s) => s.getAllKeys());
 
   const DEFAULT_ENDPOINT = "https://script.google.com/macros/s/AKfycbxuPdXOYLwRY085kDTyEg6QP6jVAPlGdMjYBS2CX2f06pFBCFuBhNXP_mluxZv_DEvfUA/exec";
+  const CALL_LINE = "https://meet.google.com/sbi-dasn-rvt";
   let settings = { round: "2026B", option: "CHK-01A", inspectors: "MF Inspector 1, MF Inspector 2", inspector: "", verifier: "Shafaqat Ali", earthLimit: 10, instrument: "Hioki FT6031 earth tester", serial: "241104390", calDue: "2026-12-23", endpoint: DEFAULT_ENDPOINT, key: "", device: "", freeSpace: true };
   async function loadSettings() { const s = await dbGet("kv", "settings"); if (s) settings = Object.assign(settings, s); if (!settings.endpoint) settings.endpoint = DEFAULT_ENDPOINT; }
   const saveSettings = () => dbPut("kv", settings, "settings");
@@ -2206,7 +2207,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         const salt = Math.random().toString(36).slice(2, 10);
         people[id] = { id, name: j.person.name, role: j.person.role, title: j.person.title || "", secret, salt, pinHash: await pinHash(pin, salt), since: new Date().toISOString() };
         me = people[id]; locked = false; await savePeople(); await dbPut("kv", id, "session"); clockFrom(j.time);
-        updateWho(); touch(); toast("Welcome " + me.name); await loadConfig(); home(); syncNow(false);
+        updateWho(); touch(); toast("Welcome " + me.name); await loadConfig(); home(); syncNow(false); beat();
       } catch (e) { $("#siRes").textContent = "Not signed in: " + e.message; }
     };
     $("#set").onclick = settingsView;
@@ -2300,6 +2301,47 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /* ------------------------------ team status: who holds which tower ------------------------------ */
   let teamStatus = { round: "", at: "", list: {} };
   const signer = () => (me && me.secret ? me : Object.values(people).find((x) => x.secret) || null);
+  /* -------------------- team safety: heartbeat, Call Chief, incoming call -------------------- */
+  let _lastCallTs = 0, _ringTimer = null;
+  async function battPct() { try { if (navigator.getBattery) { const b = await navigator.getBattery(); return Math.round(b.level * 100); } } catch (e) {} return null; }
+  async function beat() {
+    const u = signer(); if (!u || !settings.endpoint || !navigator.onLine) return;
+    try {
+      const r = await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "beat", user: u.id, auth: u.secret, device: settings.device || "", lat: fix && fix.lat, lon: fix && fix.lon, acc: fix && fix.acc, batt: await battPct() }) });
+      const j = await r.json();
+      if (j && j.ok && j.call) showIncomingCall(j.call); else hideRing();
+    } catch (e) {}
+  }
+  async function callChief() {
+    const u = signer(); if (!u) return toast("Sign in first.");
+    window.open(CALL_LINE, "_blank");
+    try {
+      await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "callchief", user: u.id, auth: u.secret, device: settings.device || "", lat: fix && fix.lat, lon: fix && fix.lon, acc: fix && fix.acc, batt: await battPct() }) });
+      toast("Calling Chief - the office has your location.");
+    } catch (e) { toast("Call line opened. No signal, so the office was not alerted - stay on the line."); }
+  }
+  function showIncomingCall(call) {
+    if (document.getElementById("ringOv") && call.ts === _lastCallTs) return;
+    _lastCallTs = call.ts; hideRing();
+    const ov = document.createElement("div"); ov.id = "ringOv";
+    ov.style.cssText = "position:fixed;inset:0;z-index:99999;background:#0E5A73;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:24px";
+    ov.innerHTML = '<div style="font-size:20px;opacity:.85">Incoming call</div>' +
+      '<div style="font-size:30px;font-weight:700">' + esc(call.fromName || call.from || "Chief") + ' is calling</div>' +
+      '<div style="display:flex;gap:14px;margin-top:10px">' +
+      '<button id="ringJoin" style="font-size:18px;padding:14px 24px;border:0;border-radius:10px;background:#fff;color:#0E5A73;font-weight:700">Join</button>' +
+      '<button id="ringNo" style="font-size:18px;padding:14px 24px;border:0;border-radius:10px;background:#b00020;color:#fff">Dismiss</button></div>';
+    document.body.appendChild(ov);
+    try { navigator.vibrate && navigator.vibrate([400,200,400,200,400]); _ringTimer = setInterval(() => { try { navigator.vibrate && navigator.vibrate([400,200,400]); } catch (e) {} }, 2000); } catch (e) {}
+    document.getElementById("ringJoin").onclick = () => { window.open(call.url || CALL_LINE, "_blank"); clearCall(); };
+    document.getElementById("ringNo").onclick = () => clearCall();
+  }
+  function hideRing() { const ov = document.getElementById("ringOv"); if (ov) ov.remove(); if (_ringTimer) { clearInterval(_ringTimer); _ringTimer = null; } }
+  async function clearCall() {
+    hideRing(); _lastCallTs = 0; const u = signer(); if (!u || !settings.endpoint) return;
+    try { await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "callclear", user: u.id, auth: u.secret }) }); } catch (e) {}
+  }
   const nameOfId = (id) => ((((config && config.team) || []).find((x) => x.id === id) || {}).name || (people[id] || {}).name || id || "");
   const hm = (iso) => { if (!iso) return ""; const o = OMT(iso); return o.slice(0, 10) === today() ? o.slice(11, 16) : o.slice(0, 16); };
   function statusFor(structure, form) { const e = (teamStatus.list || {})[structure + "_" + Core.formCode(form)]; return teamStatus.round === settings.round ? e || null : null; }
@@ -2370,6 +2412,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     $("#title").textContent = "Round " + settings.round;
     $("#back").classList.add("hide");
     app().innerHTML = `<section class="dash" id="dash"></section><div class="card next" id="nextCard"></div>
+      <div class="card" style="border:2px solid #0E5A73;background:#f2fbfe"><button class="btn pri" id="callChief" style="width:100%;font-size:17px;padding:14px">📞 Call Chief</button><div class="muted" style="margin-top:6px;text-align:center">Opens the team call line and alerts the Chief with your location</div></div>
       <div class="card"><h2>Start an inspection</h2>
         <label class="f">Form</label>
         <select id="nf"><option value="${esc(settings.option)}">${esc(FORM_TITLE[settings.option])}</option><option value="CHK-10">${FORM_TITLE["CHK-10"]}</option><option value="CHK-02">CHK-02 Thermography – structure row</option><option value="CHK-04">CHK-04 Corona / PD – structure row</option><option value="CHK-06">CHK-06 Night patrol – structure row</option>${REGISTRY.filter((e) => e.scope === "asset" && DEFS[e.id]).map((e) => `<option value="${esc(e.id)}">${esc(e.code + " " + e.title)}</option>`).join("")}</select>
@@ -2405,6 +2448,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       if (!t) return toast("Type a tower number (e.g. 145) or tap Nearest tower first.");
       openDirections(t);
     };
+    $("#callChief") && ($("#callChief").onclick = callChief);
     $("#sendNow") && ($("#sendNow").onclick = async () => { if (!navigator.onLine) return modal("No signal", "This phone has no internet now. Move to Wi-Fi or mobile data, then tap Send now again. Your work is safe on the phone until then."); const _b = $("#sendNow"); _b.disabled = true; const _t = _b.textContent; _b.textContent = "Sending…"; try { await syncNow(true); } catch (e) {} _b.textContent = _t; _b.disabled = false; updateSyncBadge(); });
     $("#near").onclick = () => {
       if (!fix) return toast("No GPS fix yet – wait a moment outdoors.");
@@ -3832,6 +3876,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     window.addEventListener("online", () => { syncNow(false); loadConfig(); if (view === "home") home(); });
     window.addEventListener("offline", () => { updateSyncBadge(); if (view === "home") home(); });
     setInterval(() => syncNow(false), 60000);
+    setInterval(beat, 25000); beat();
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) beat(); });
     setInterval(() => loadConfig().then(() => { if (view === "home") home(); }), 300000);
     await loadConfig();
     locked = true; signInView(); updateSyncBadge(); syncNow(false);
