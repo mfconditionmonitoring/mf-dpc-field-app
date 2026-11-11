@@ -1989,9 +1989,9 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     (v.people || []).forEach((u) => { const p = team[u]; if (p && p.active === false && p.withdrawn && (pkg.audit || []).some((e) => e.u === u && e.t > p.withdrawn)) add("error", "WITHDRAWN", "Changes by " + p.name + " after access was withdrawn"); });
     // where
     const sc = pkg.startCheck || {};
-    if (sc.dist != null && sc.dist > cfg.maxDist) add(sc.reason || sc.late ? "warn" : "error", "START_FAR", (sc.late ? "First entry made " : "Started ") + sc.dist + " m from " + pkg.structure + (sc.reason ? " – reason: " + sc.reason : " – no reason given"));
-    if (!sc.time && pkg.schema >= 3) add("warn", "START_NOGPS", "No GPS position when the inspection was started");
-    else if (sc.time && sc.dist == null && ctx.tower && ctx.tower.lat != null) add("warn", "START_NOGPS", "No GPS fix when the inspection was started" + (sc.reason ? " – " + sc.reason : ""));
+    if (sc.dist != null && sc.dist > cfg.maxDist) add("info", "START_FAR", (sc.late ? "First entry made " : "Started ") + sc.dist + " m from " + pkg.structure + (sc.reason ? " – " + sc.reason : ""));
+    if (!sc.time && pkg.schema >= 3) add("info", "START_NOGPS", "No GPS position when the inspection was started");
+    else if (sc.time && sc.dist == null && ctx.tower && ctx.tower.lat != null) add("info", "START_NOGPS", "No GPS fix when the inspection was started" + (sc.reason ? " – " + sc.reason : ""));
     // photos
     const far = [], old = [], nosha = [], mism = [], dup = [], exifOff = [];
     const day = (pkg.header || {}).date || "";
@@ -2009,8 +2009,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     });
     if (dup.length) add("error", "PHOTO_DUP", "Same photo used more than once: " + dup.join("; "));
     if (mism.length) add("error", "PHOTO_CHANGED", "Photo file differs from the one taken on the phone: " + mism.join(", "));
-    if (far.length) add("warn", "PHOTO_FAR", "Photos taken more than " + cfg.maxDist + " m from the structure: " + far.join(", "));
-    if (old.length) add("warn", "PHOTO_OLD", "Photos not taken at the time of the inspection: " + old.join(", "));
+    if (far.length) add("info", "PHOTO_FAR", "Photos taken more than " + cfg.maxDist + " m from the structure: " + far.join(", "));
+    if (old.length) add("info", "PHOTO_OLD", "Photos not taken at the time of the inspection: " + old.join(", "));
     if (exifOff.length) add("warn", "PHOTO_DATE", "Camera date differs from the inspection date: " + exifOff.join(", "));
     if (nosha.length && pkg.schema >= 3) add("warn", "PHOTO_NOSHA", "Photos without a fingerprint: " + nosha.join(", "));
     // when, how fast
@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.5.0";
+  const APP_VERSION = "1.6.0";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2217,7 +2217,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   let clockSkew = 0;
   function clockFrom(serverIso) { if (!serverIso) return; clockSkew = Math.round((Date.parse(serverIso) - Date.now()) / 60000); if (Math.abs(clockSkew) > 5) toast("Phone clock is " + clockSkew + " min off – set the date and time to automatic", 5000); }
   /** Is the user allowed to reopen a completed record? Team leaders and the E&I Engineer, or anyone when it was returned. */
-  const canReopen = (p) => me && (me.role === "lead" || me.role === "engineer" || ((reviewOf(p) || {}).status === "returned"));
+  const isMine = (p) => !!me && !!p && [p.createdBy, p.completedBy, p.holder].includes(me.id);
+  const canReopen = (p) => me && (me.role === "lead" || me.role === "engineer" || isMine(p) || ((reviewOf(p) || {}).status === "returned"));
 
   /* ------------------------------ GPS ------------------------------ */
   let fix = null;
@@ -2399,9 +2400,10 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     if (all.some((p) => p.id === st.pkgId)) return null;
     const who = st.holderName || nameOfId(st.holder);
     if (st.status === "complete") {
-      if (!(me.role === "lead" || me.role === "engineer")) { alert(id + " " + code + " was already completed by " + who + " (" + hm(st.completed || st.updated) + ").\n\nIt cannot be started again. If it must be corrected, ask the team leader or the E&I Engineer."); return "stop"; }
-      const r = prompt(id + " " + code + " was completed by " + who + ". Download it to this phone to correct it?\nGive the reason (kept in the record), or Cancel:"); if (!r || !r.trim()) return "stop";
-      return (await takeOver(st, r.trim())) || "stop";
+      const mineSt = [st.holder, st.completedBy].includes(me.id);
+      if (!(me.role === "lead" || me.role === "engineer" || mineSt)) { alert(id + " " + code + " was already completed by " + who + " (" + hm(st.completed || st.updated) + ").\n\nOnly " + who.split(" ")[0] + ", the team leader or the E&I Engineer can correct it."); return "stop"; }
+      if (!confirm(id + " " + code + " was completed by " + (mineSt ? "you" : who) + " (" + hm(st.completed || st.updated) + ").\n\nDownload it to this phone to correct it?")) return "stop";
+      return (await takeOver(st, "correction by " + me.name)) || "stop";
     }
     if (st.holder === me.id) { if (!confirm("You already started " + id + " " + code + " on another phone (last change " + hm(st.updated) + ").\n\nDownload it here and continue?")) return "stop"; return (await takeOver(st, "same person, other phone")) || "stop"; }
     if (!confirm(id + " " + code + " is already being inspected by " + who + " (last change " + hm(st.updated) + ").\n\nOK = continue " + who.split(" ")[0] + "'s inspection on this phone – their copy becomes read-only\nCancel = do not start")) return "stop";
@@ -2453,7 +2455,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       openDirections(t);
     };
     $("#callChief") && ($("#callChief").onclick = () => callChief(false)); $("#videoChief") && ($("#videoChief").onclick = () => callChief(true));
-    if ($("#teamCalls")) MFCall.panel($("#teamCalls"));
+    if ($("#teamCalls")) MFCall.panel($("#teamCalls"), { contacts: () => ((config && config.team) || []).filter((p) => p.active !== false && (!me || p.id !== me.id)) });
     $("#sendNow") && ($("#sendNow").onclick = async () => { if (!navigator.onLine) return modal("No signal", "This phone has no internet now. Move to Wi-Fi or mobile data, then tap Send now again. Your work is safe on the phone until then."); const _b = $("#sendNow"); _b.disabled = true; const _t = _b.textContent; _b.textContent = "Sending…"; try { await syncNow(true); } catch (e) {} _b.textContent = _t; _b.disabled = false; updateSyncBadge(); });
     $("#near").onclick = () => {
       if (!fix) return toast("No GPS fix yet – wait a moment outdoors.");
@@ -2530,7 +2532,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /** Run fn with every change it makes tagged (e.g. "bulk" for Mark remaining as satisfactory). */
   function tagged(tag, fn) { auditTag = tag; try { fn(); } finally { auditTag = ""; } }
   function save(force) {
-    if (cur && cur.status === "complete" && force !== true) return toast("Completed – reopen it to change anything");
+    if (cur && cur.status === "complete" && force !== true) return toast("Completed – press ✏️ Correct this checklist first");
     if (cur && cur.heldBy && force !== true) return toast("Continued by another team member – this copy is read-only");
     cur.updated = new Date().toISOString(); cur.rev = (cur.rev || 0) + 1; queueSync();
     if (isGen(cur.form)) genHeaderSync(cur);
@@ -2861,7 +2863,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     return { thumb, w: bmp.width, h: bmp.height };
   }
   async function capture(slot, caption, src) {
-    if (cur.status === "complete") { toast("Completed – reopen it to change anything"); return false; }
+    if (cur.status === "complete") { toast("Completed – press ✏️ Correct this checklist first"); return false; }
     if (cur.heldBy) { toast("Continued by another team member – this copy is read-only"); return false; }
     const file = await (src === "gallery" ? pickImage(false) : inAppCamera()); if (!file) return false;
     const when = new Date();
@@ -2872,9 +2874,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     // a photo from the gallery taken earlier, or far from the structure, needs a reason
     const why = [];
     const ageMin = file.lastModified ? Math.round((Date.now() - file.lastModified) / 60000) : 0;
-    if (ageMin > 30) { const r = prompt("This photo was taken " + new Date(file.lastModified).toLocaleString() + ", not now.\nUse it anyway? Give the reason:"); if (!r || !r.trim()) return false; why.push(r.trim()); }
+    if (ageMin > 30) why.push(src === "gallery" ? "from phone memory" : "taken earlier");   // v1.6: recorded, not asked
     const dist = towerDist(structOf(cur.form, cur.structure));
-    if (dist != null && dist > 300) { const r = prompt("GPS shows you " + dist + " m from " + cur.structure + ".\nGive the reason (e.g. zoom view from the access road):"); if (!r || !r.trim()) return false; why.push(r.trim()); }
     const { thumb, w, h } = await makeThumb(file);
     const orig = new Blob([buf], { type: file.type || "image/jpeg" });
     await dbPut("photos", { orig, thumb, w, h, uploaded: false, size: orig.size }, cur.id + "/" + slot);
@@ -2899,10 +2900,9 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   /** Before a new record: no GPS, or far from the structure → the inspector confirms with a reason. */
   function startReason(form, id) {
+    // v1.6 (Chief 11-Nov): no question. Checklists may be filled later from photos in the phone memory.
     const st = structOf(form, id) || TW[id], d = towerDist(st);
-    if (!fix) { const r = prompt("No GPS position yet. Start " + id + " anyway? Give the reason (or Cancel and wait for GPS):"); return r && r.trim() ? r.trim() : null; }
-    if (d != null && d > 300) { const r = prompt("GPS shows you " + d + " m from " + id + ". Check the number.\nStart anyway? Give the reason:"); return r && r.trim() ? r.trim() : null; }
-    return "";
+    return !fix ? "no GPS at start" : d != null && d > 300 ? "filled away from the structure" : "";
   }
   /** Stamp a new record with who started it and where. */
   function stampNew(p, reason, late) {
@@ -2924,11 +2924,11 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     }
     if (!cur || cur.status !== "complete") return;
     pane.classList.add("locked");
-    pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><div class="card" style="border-left:4px solid #1e8e3e"><b>Completed</b> by ${esc((people[cur.completedBy] || {}).name || cur.signoff.inspector || cur.completedBy || "")} ${esc((cur.completed ? OMT(cur.completed).slice(0, 16) : ""))} – read-only.
-      ${canReopen(cur) ? '<div class="row" style="margin-top:8px"><button class="btn sm warn" id="reopen">Reopen to correct</button></div>' : ""}</div></div>`);
+    pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><div class="card" style="border-left:4px solid #1e8e3e"><b>Completed</b> by ${esc((people[cur.completedBy] || {}).name || cur.signoff.inspector || cur.completedBy || "")} ${esc((cur.completed ? OMT(cur.completed).slice(0, 16) : ""))} ${canReopen(cur) ? "." : " – read-only. Only the inspector who made it, the team leader or the E&I Engineer can correct it."}
+      ${canReopen(cur) ? '<div class="row" style="margin-top:8px"><button class="btn pri" id="reopen">✏️ Correct this checklist</button></div><div class="muted" style="margin-top:4px">Change results, remarks or photos, then press Complete again. Every change is kept in the history under your name.</div>' : ""}</div></div>`);
     const b = $("#reopen"); if (b) b.onclick = async () => {
-      const r = prompt("Reason for reopening " + cur.structure + " (kept in the record):"); if (!r || !r.trim()) return;
-      cur.status = "open"; T.note(cur, whoAmI(), "status", "reopen", r.trim()); delete cur.completedBy; save(true); await dbPut("insp", cur);
+      // v1.6 (Chief 11-Nov): one tap, no reason and no GPS question
+      cur.status = "open"; T.note(cur, whoAmI(), "status", "reopen", "correction by " + me.name); delete cur.completedBy; save(true); await dbPut("insp", cur);
       isLog(cur.form) ? renderLog() : isGen(cur.form) ? renderGen() : renderInsp();
     };
   }
@@ -4020,14 +4020,35 @@ const MFCall = (() => {
   function hangup() { end("Call ended.", true); }
   function mute() { if (!local) return; const a = local.getAudioTracks()[0]; if (a) { a.enabled = !a.enabled; btnState("mfcMute", !a.enabled, a.enabled ? "🎤 Mute" : "🔇 Unmute"); } }
   function camOnOff() { if (!local) return; const v = local.getVideoTracks()[0]; if (v) { v.enabled = !v.enabled; btnState("mfcCam", !v.enabled, v.enabled ? "📷 Camera off" : "📷 Camera on"); } }
-  async function flip() {
-    if (!local || !pc) return; const old = local.getVideoTracks()[0]; if (!old) return;
-    facing = facing === "user" ? "environment" : "user";
+  async function camStream(want, notId) {
+    const base = { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 20 } };
+    try { return await navigator.mediaDevices.getUserMedia({ video: Object.assign({ facingMode: { exact: want } }, base) }); } catch (e) {}
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 20 } } });
-      const nt = s.getVideoTracks()[0], snd = pc.getSenders().find((x) => x.track && x.track.kind === "video");
-      if (snd) await snd.replaceTrack(nt); local.removeTrack(old); old.stop(); local.addTrack(nt); showLocal(); capBitrate(pc);
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput" && d.deviceId && d.deviceId !== notId);
+      const re = want === "user" ? /front|user|facetime|selfie/i : /back|rear|environment/i;
+      const pick = cams.find((d) => re.test(d.label)) || cams[0];
+      if (pick) return await navigator.mediaDevices.getUserMedia({ video: Object.assign({ deviceId: { exact: pick.deviceId } }, base) });
+    } catch (e) {}
+    return navigator.mediaDevices.getUserMedia({ video: Object.assign({ facingMode: want }, base) });
+  }
+  let flipping = false;
+  async function flip() {
+    if (!local || !pc || flipping) return; const old = local.getVideoTracks()[0]; if (!old) return;
+    flipping = true;
+    const was = facing, want = facing === "user" ? "environment" : "user";
+    let oldId = ""; try { oldId = (old.getSettings() || {}).deviceId || ""; } catch (e) {}
+    const snd = pc.getSenders().find((x) => x.track && x.track.kind === "video") || pc.getSenders().find((x) => !x.track);
+    // v1.6: the first camera is closed before the other one is opened
+    try { if (snd) await snd.replaceTrack(null); } catch (e) {}
+    local.removeTrack(old); old.stop();
+    let s = null;
+    try { s = await camStream(want, oldId); facing = want; }
+    catch (e) { try { s = await camStream(was, ""); } catch (e2) {} toast("This device could not switch the camera" + (s ? " – staying on the same one." : ".")); }
+    try {
+      if (s) { const nt = s.getVideoTracks()[0]; if (snd) await snd.replaceTrack(nt); local.addTrack(nt); capBitrate(pc); }
+      showLocal();
     } catch (e) { toast("Could not switch camera: " + e.message); }
+    flipping = false;
   }
   function tick() { const el = $id("mfcClock"); if (el && t0) { const s = Math.floor((Date.now() - t0) / 1000); el.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); } }
 
@@ -4053,15 +4074,16 @@ const MFCall = (() => {
   function css() {
     if ($id("mfcCss")) return;
     const s = document.createElement("style"); s.id = "mfcCss";
-    s.textContent = `#mfcOv{position:fixed;inset:0;z-index:2147483000;background:#0b2f3c;color:#fff;display:flex;flex-direction:column;font:16px system-ui,Segoe UI,Roboto,Arial,sans-serif}
-#mfcOv .hd{padding:16px 18px 6px;text-align:center}#mfcOv .nm{font-size:26px;font-weight:700}#mfcOv .sb{opacity:.85;margin-top:4px;min-height:20px}
-#mfcOv .stage{flex:1;position:relative;background:#06202a;overflow:hidden}#mfcRemote{width:100%;height:100%;object-fit:contain;background:#06202a}
+    s.textContent = `#mfcOv{position:fixed;left:0;top:0;width:100%;height:100vh;height:100dvh;max-height:100dvh;box-sizing:border-box;overflow:hidden;z-index:2147483000;background:#0b2f3c;color:#fff;display:flex;flex-direction:column;font:16px system-ui,Segoe UI,Roboto,Arial,sans-serif;padding-top:env(safe-area-inset-top)}
+#mfcOv .hd{flex:0 0 auto;padding:10px 18px 6px;text-align:center}#mfcOv .nm{font-size:22px;font-weight:700}#mfcOv .sb{opacity:.85;margin-top:4px;min-height:20px}
+#mfcOv .stage{flex:1 1 0;min-height:0;position:relative;background:#06202a;overflow:hidden}#mfcRemote{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:contain;background:#06202a}
 #mfcLocal{position:absolute;right:10px;bottom:10px;width:28%;max-width:180px;border-radius:10px;border:2px solid #fff;background:#000;object-fit:cover}
-#mfcOv .bar{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;padding:14px}#mfcOv .bar button{font-size:17px;padding:13px 18px;border:0;border-radius:12px;background:#ffffff22;color:#fff;min-width:110px}
-#mfcOv .bar button.on{background:#F39C12}#mfcOv .bar .red{background:#c62828}#mfcOv .bar .grn{background:#1e8e3e}
+#mfcOv .mfcBar{flex:0 0 auto;height:auto;position:static;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;padding:10px 10px calc(12px + env(safe-area-inset-bottom));background:#0b2f3c}#mfcOv .mfcBar button{font-size:16px;padding:13px 8px;border:0;border-radius:12px;background:#ffffff22;color:#fff;min-width:0;white-space:nowrap}
+@media(max-height:480px){#mfcOv .hd{padding:4px 12px 2px}#mfcOv .nm{font-size:17px}#mfcOv .mfcBar{grid-template-columns:repeat(4,1fr);padding:6px 6px calc(6px + env(safe-area-inset-bottom))}#mfcOv .mfcBar button{padding:9px 4px;font-size:14px}}
+#mfcOv .mfcBar button.on{background:#F39C12}#mfcOv .mfcBar .red{background:#c62828}#mfcOv .mfcBar .grn{background:#1e8e3e}
 #mfcOv.ring .stage{display:flex;align-items:center;justify-content:center;font-size:72px}
 .mfcList .row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #e3e9ec}.mfcList .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
-.mfcList button{padding:8px 12px;border-radius:9px;border:1px solid #0E5A73;background:#fff;color:#0E5A73;font-weight:600}.mfcList button.v{background:#0E5A73;color:#fff}`;
+.mfcList button,.mfcList a.b{padding:8px 12px;border-radius:9px;border:1px solid #0E5A73;background:#fff;color:#0E5A73;font-weight:600;text-decoration:none;font-size:14px}.mfcList button.v{background:#0E5A73;color:#fff}.mfcList a.w{border-color:#1e8e3e;color:#1e8e3e}`;
     document.head.appendChild(s);
   }
   function shell(cls) {
@@ -4072,7 +4094,7 @@ const MFCall = (() => {
     const ov = shell("ring");
     ov.innerHTML = `<div class="hd"><div class="sb">Incoming ${isVideo ? "video" : "voice"} call</div><div class="nm">${escH(peer.name)}</div></div>
       <div class="stage">📞</div>
-      <div class="bar"><button class="grn" id="mfcAns">📞 Answer</button>${isVideo ? '<button class="grn" id="mfcAnsV">🎥 Answer with video</button>' : ""}<button class="red" id="mfcDec">Decline</button></div>`;
+      <div class="mfcBar"><button class="grn" id="mfcAns">📞 Answer</button>${isVideo ? '<button class="grn" id="mfcAnsV">🎥 Answer with video</button>' : ""}<button class="red" id="mfcDec">Decline</button></div>`;
     $id("mfcAns").onclick = () => answer(false); if ($id("mfcAnsV")) $id("mfcAnsV").onclick = () => answer(true); $id("mfcDec").onclick = decline;
   }
   function ui(sub) {
@@ -4081,7 +4103,7 @@ const MFCall = (() => {
       ov = shell("");
       ov.innerHTML = `<div class="hd"><div class="nm">${escH(peer ? peer.name : "")}</div><div class="sb"><span id="mfcSub"></span> <span id="mfcClock"></span></div></div>
         <div class="stage"><video id="mfcRemote" autoplay playsinline></video><video id="mfcLocal" autoplay playsinline muted></video></div>
-        <div class="bar"><button id="mfcMute">🎤 Mute</button>${isVideo ? '<button id="mfcCam">📷 Camera off</button><button id="mfcFlip">🔄 Switch camera</button>' : '<button id="mfcAddV">🎥 Video</button>'}<button class="red" id="mfcEnd">⏹ End call</button></div>`;
+        <div class="mfcBar"><button id="mfcMute">🎤 Mute</button>${isVideo ? '<button id="mfcCam">📷 Camera off</button><button id="mfcFlip">🔄 Switch camera</button>' : '<button id="mfcAddV">🎥 Video</button>'}<button class="red" id="mfcEnd">⏹ End call</button></div>`;
       $id("mfcMute").onclick = mute; $id("mfcEnd").onclick = hangup;
       if ($id("mfcCam")) $id("mfcCam").onclick = camOnOff; if ($id("mfcFlip")) $id("mfcFlip").onclick = flip;
       if ($id("mfcAddV")) $id("mfcAddV").onclick = () => toast("This is a voice call. End it and press Video to call with the camera.");
@@ -4096,13 +4118,23 @@ const MFCall = (() => {
   /** A ready-made "who is online" list with Voice / Video buttons. */
   function panel(el, opts) {
     opts = opts || {};
+    const tel = (n) => { let d = String(n || "").replace(/[^\d+]/g, ""); if (/^00/.test(d)) d = "+" + d.slice(2); if (d && d[0] !== "+" && d.length <= 8) d = "+968" + d; return d; };
     const draw = (list, err) => {
       if (!el || !document.body.contains(el)) return false;
-      const on = (list || []).filter((p) => p.online && (!opts.filter || opts.filter(p))).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      const off = (list || []).filter((p) => !p.online && p.seconds < 6 * 3600 && (!opts.filter || opts.filter(p)));
-      const row = (p, live) => `<div class="row"><span class="dot" style="background:${live ? (p.busy ? "#F39C12" : "#1e8e3e") : "#b0bec5"}"></span><b style="flex:1">${escH(p.name)}</b><span class="muted" style="font-size:12px">${live ? (p.busy ? "on a call" : "online") : "last seen " + Math.round(p.seconds / 60) + " min ago"}</span>
-        ${live ? `<button data-c="${escH(p.id)}" data-n="${escH(p.name)}">📞 Voice</button><button class="v" data-c="${escH(p.id)}" data-n="${escH(p.name)}" data-v="1">🎥 Video</button>` : ""}</div>`;
-      el.innerHTML = `<div class="mfcList">${on.length ? on.map((p) => row(p, true)).join("") : '<p class="muted">Nobody else has the app open right now.</p>'}${off.map((p) => row(p, false)).join("")}</div>` +
+      list = list || [];
+      let contacts = []; try { contacts = (opts.contacts ? opts.contacts() : []) || []; } catch (e) {}
+      const on = list.filter((p) => p.online && (!opts.filter || opts.filter(p))).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      const onIds = {}; on.forEach((p) => (onIds[p.id] = 1));
+      const seen = {}; list.forEach((p) => (seen[p.id] = p));
+      // not in the app now: team members from the register, then anything else seen in the last 6 h (e.g. a laptop)
+      const away = contacts.filter((c) => c && c.id && !onIds[c.id]).map((c) => ({ id: c.id, name: c.name, phone: c.phone || "", seconds: seen[c.id] ? seen[c.id].seconds : null }));
+      const awayIds = {}; away.forEach((p) => (awayIds[p.id] = 1));
+      list.filter((p) => !p.online && p.seconds < 6 * 3600 && !awayIds[p.id] && (!opts.filter || opts.filter(p))).forEach((p) => away.push({ id: p.id, name: p.name, phone: "", seconds: p.seconds }));
+      const liveRow = (p) => `<div class="row"><span class="dot" style="background:${p.busy ? "#F39C12" : "#1e8e3e"}"></span><b style="flex:1">${escH(p.name)}</b><span class="muted" style="font-size:12px">${p.busy ? "on a call" : "in the app"}</span>
+        <button data-c="${escH(p.id)}" data-n="${escH(p.name)}">📞 Voice</button><button class="v" data-c="${escH(p.id)}" data-n="${escH(p.name)}" data-v="1">🎥 Video</button></div>`;
+      const awayRow = (p) => { const t = tel(p.phone); return `<div class="row"><span class="dot" style="background:#b0bec5"></span><b style="flex:1">${escH(p.name)}</b><span class="muted" style="font-size:12px">${p.seconds == null ? "app closed" : "app closed · seen " + (p.seconds < 5400 ? Math.max(1, Math.round(p.seconds / 60)) + " min" : Math.round(p.seconds / 3600) + " h") + " ago"}</span>
+        ${t ? `<a class="b w" target="_blank" rel="noopener" href="https://wa.me/${escH(t.replace(/\D/g, ""))}">WhatsApp</a><a class="b" href="tel:${escH(t)}">📱 Phone</a>` : '<span class="muted" style="font-size:12px">no number saved</span>'}</div>`; };
+      el.innerHTML = `<div class="mfcList">${on.length ? on.map(liveRow).join("") : '<p class="muted">Nobody else has the app open right now' + (away.some((p) => p.phone) ? " – use WhatsApp or Phone below." : ".") + "</p>"}${away.map(awayRow).join("")}</div>` +
         (err ? `<p class="muted" style="color:#c62828">Calls: ${escH(err)}</p>` : "");
       el.querySelectorAll("button[data-c]").forEach((b) => (b.onclick = () => call(b.dataset.c, b.dataset.n, !!b.dataset.v)));
     };
