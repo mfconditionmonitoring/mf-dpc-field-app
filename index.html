@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.0";
+  const APP_VERSION = "1.6.1";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2305,11 +2305,41 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /* -------------------- team safety: heartbeat, Call Chief, incoming call -------------------- */
   let _lastCallTs = 0, _ringTimer = null;
   async function battPct() { try { if (navigator.getBattery) { const b = await navigator.getBattery(); return Math.round(b.level * 100); } } catch (e) {} return null; }
+  /** v1.6.1 (Chief 12-Nov): every heartbeat tells the office what this phone holds – how many checklists are
+   *  completed, which are still waiting to be sent – so the E&I Engineer sees field progress before the upload ends.
+   *  It travels inside the "device" text of the heartbeat, so the cloud script needs no change. */
+  function mfRanges(ids) {
+    const t = [], o = [];
+    ids.forEach((x) => { const m = /^T(\d+)$/.exec(x); if (m) t.push(+m[1]); else o.push(x); });
+    t.sort((x, y) => x - y); const out = []; const f = (n) => "T" + String(n).padStart(3, "0");
+    for (let i = 0; i < t.length; i++) { let j = i; while (j + 1 < t.length && t[j + 1] <= t[j] + 1) j++; out.push(j > i ? f(t[i]) + "-" + f(t[j]) : f(t[i])); i = j; }
+    return out.concat(o.sort()).join(",");
+  }
+  let _workTag = "", _workAt = 0;
+  async function workTag() {
+    if (Date.now() - _workAt < 120000) return _workTag;
+    try {
+      const cd = {}, pd = {}, op = {}; let n = 0, c = 0, wr = 0, wp = 0;
+      for (const p of await dbAll("insp")) {
+        if (p.round !== settings.round || p.heldBy || !p.structure) continue;
+        const code = Core.formCode(p.form); n++;
+        let pend = !p.sentRev || (p.sentRev || 0) < (p.rev || 0); if (pend) wr++;
+        for (const k of Object.keys(p.photos || {})) { const r = await dbGet("photos", p.id + "/" + k); if (r && !r.uploaded) { wp++; pend = true; } }
+        if (p.status === "complete") { c++; (cd[code] = cd[code] || []).push(p.structure); } else (op[code] = op[code] || []).push(p.structure);
+        if (pend) (pd[code] = pd[code] || []).push(p.structure);
+      }
+      const pack = (m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, mfRanges(v)]));
+      let w = { t: Date.now(), v: APP_VERSION, n, c, wr, wp, cd: pack(cd), pd: pack(pd), op: pack(op) };
+      let s = JSON.stringify(w); if (s.length > 1500) { delete w.op; s = JSON.stringify(w); } if (s.length > 1500) { w.cd = {}; w.cut = 1; s = JSON.stringify(w); } if (s.length > 1500) { w.pd = {}; s = JSON.stringify(w); }
+      _workTag = " \u27e6W" + s + "\u27e7"; _workAt = n ? Date.now() : Date.now() - 100000;   // nothing found yet (app still starting): look again at the next heartbeat
+    } catch (e) {}
+    return _workTag;
+  }
   async function beat() {
     const u = signer(); if (!u || !settings.endpoint || !navigator.onLine) return;
     try {
       const r = await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action: "beat", user: u.id, auth: u.secret, device: settings.device || "", lat: fix && fix.lat, lon: fix && fix.lon, acc: fix && fix.acc, batt: await battPct() }) });
+        body: JSON.stringify({ action: "beat", user: u.id, auth: u.secret, device: (settings.device || "") + (await workTag()), lat: fix && fix.lat, lon: fix && fix.lon, acc: fix && fix.acc, batt: await battPct() }) });
       const j = await r.json();
       // v1.5.0: calls ring through the built-in team call (MFCall) – the old Meet ring is retired
     } catch (e) {}
