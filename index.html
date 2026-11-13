@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.1";
+  const APP_VERSION = "1.6.2";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2330,6 +2330,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       }
       const pack = (m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, mfRanges(v)]));
       let w = { t: Date.now(), v: APP_VERSION, n, c, wr, wp, cd: pack(cd), pd: pack(pd), op: pack(op) };
+      if (typeof lastErr === "string" && lastErr) w.e = lastErr.slice(0, 90); if (typeof syncing !== "undefined" && syncing) w.s = 1;
       let s = JSON.stringify(w); if (s.length > 1500) { delete w.op; s = JSON.stringify(w); } if (s.length > 1500) { w.cd = {}; w.cut = 1; s = JSON.stringify(w); } if (s.length > 1500) { w.pd = {}; s = JSON.stringify(w); }
       _workTag = " \u27e6W" + s + "\u27e7"; _workAt = n ? Date.now() : Date.now() - 100000;   // nothing found yet (app still starting): look again at the next heartbeat
     } catch (e) {}
@@ -3493,58 +3494,85 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /** Who sends a record: the last person who worked on it, if their key is on this phone, else the person signed in. */
   const uploaderFor = (p) => (people[p.lastUser] && people[p.lastUser].secret ? people[p.lastUser] : me && me.secret ? me : Object.values(people).find((x) => x.secret) || null);
   const refused = (e) => /ACCESS WITHDRAWN|Wrong personal key|Unknown person/.test(e.message || "");
+  /** v1.6.2 (Chief 13-Nov): keep the screen on while the app is open, so Android does not put the tablet to sleep and cut the link. */
+  let _awake = null;
+  async function keepAwake() { try { if (!navigator.wakeLock || document.hidden || (_awake && !_awake.released)) return; _awake = await navigator.wakeLock.request("screen"); } catch (e) {} }
+  /** v1.6.2: checklist data goes first (small, the office sees the readings within minutes), then the photos three at a time.
+   *  One item that fails is skipped and tried again on the next pass – it no longer holds back everything behind it.
+   *  A record with a Sev 3 defect still sends that defect's photo ahead of the record, so the alert e-mail carries it. */
   async function syncNow(loud) {
     if (syncing) return; if (!settings.endpoint || !Object.keys(people).length) { if (loud) toast("Set the upload address in Settings and sign in."); updateSyncBadge(); return; }
     if (!navigator.onLine) { if (loud) toast("No signal – will send automatically later."); updateSyncBadge(); return; }
-    syncing = true; updateSyncBadge();
-    let sent = 0, who = null;
-    try {
-      const all = await dbAll("insp");
-      for (const p of all) {
-        who = uploaderFor(p); if (!who || p.heldBy) continue;
-        try {
-        for (const k of Object.keys(p.photos || {})) {
-          const key = p.id + "/" + k, r = await dbGet("photos", key);
-          if (!r || r.uploaded || !r.orig) continue;
-          const j = await post({ action: "photo", user: who.id, auth: who.secret, round: p.round, folder: folderOf(p), name: Core.photoName(p.structure, k), mime: r.orig.type || "image/jpeg", b64: await toB64(r.orig), device: settings.device || "" });
-          clockFrom(j.time);
-          r.uploaded = new Date().toISOString();
-          if (settings.freeSpace) delete r.orig; // original is safe in Drive; keep the thumbnail only
-          await dbPut("photos", r, key); sent++;
-        }
-        if ((p.sentRev || 0) < (p.rev || 0) || !p.sentRev) {
-          const def = DEFS[p.form], tw = TW[p.structure] || { group: "T" };
-          Core.syncDefects(p, def);
-          const ev = Core.evaluate(p, def, tw);
-          const summary = Object.assign({}, ev.counts, { highest: ev.highest, open: Core.check(p, def, tw).length, distance: Math.max(0, ...Object.values(p.photos || {}).map((x) => x.dist || 0)) });
-          const rev = p.rev || 0;
-          // sign every open change and seal the record with the sender's key
-          p.clock = { skewMin: clockSkew, device: settings.device || "", at: new Date().toISOString() };
-          await T.signAndSeal(p, secrets(), { id: who.id, device: settings.device || "" });
-          const j = await post({ action: "package", user: who.id, auth: who.secret, round: p.round, folder: folderOf(p), pkg: p, summary });
-          clockFrom(j.time);
-          // keep the signatures on this phone (only where the entry is still exactly what was signed)
-          const keepSigs = (q) => (q.audit || []).forEach((e, i) => { const sgn = (p.audit || [])[i]; if (sgn && sgn.s && !e.s && T.entryText(e) === T.entryText(sgn)) e.s = sgn.s; });
-          const fresh = await dbGet("insp", p.id); keepSigs(fresh); fresh.sentRev = Math.max(fresh.sentRev || 0, rev || 1); fresh.sentAt = new Date().toISOString();
-          await dbPut("insp", fresh); if (cur && cur.id === p.id) { keepSigs(cur); cur.sentRev = fresh.sentRev; cur.sentAt = fresh.sentAt; }
-          if (j.alerts) toast("Sev 3 alert sent to the E&I Engineer");
-          sent++;
-        }
-        } catch (e) {
-          if (!/^HELD BY/.test(e.message || "")) throw e;
-          const fresh = await dbGet("insp", p.id); fresh.heldBy = e.message.replace(/^HELD BY\s*/, ""); await dbPut("insp", fresh);
-          if (cur && cur.id === p.id) { cur.heldBy = fresh.heldBy; if (view === "insp") refreshTabs(); }
-          toast(p.structure + " is now being continued by " + fresh.heldBy.split(" –")[0] + " – your copy is read-only", 6000);
-        }
+    syncing = true; updateSyncBadge(); keepAwake();
+    let sent = 0, failed = 0, netFails = 0, stop = null, firstErr = "";
+    const heldIds = new Set();
+    const sendPhoto = async (p, k, who) => {
+      const key = p.id + "/" + k, r = await dbGet("photos", key);
+      if (!r || r.uploaded || !r.orig) return false;
+      const j = await post({ action: "photo", user: who.id, auth: who.secret, round: p.round, folder: folderOf(p), name: Core.photoName(p.structure, k), mime: r.orig.type || "image/jpeg", b64: await toB64(r.orig), device: settings.device || "" });
+      clockFrom(j.time);
+      r.uploaded = new Date().toISOString();
+      if (settings.freeSpace) delete r.orig; // original is safe in Drive; keep the thumbnail only
+      await dbPut("photos", r, key); return true;
+    };
+    const sendPkg = async (p, who) => {
+      const def = DEFS[p.form], tw = TW[p.structure] || { group: "T" };
+      Core.syncDefects(p, def);
+      for (const d of p.defects || []) if (+d.sev === 3) for (const k of [d.photo, d.photo2]) if (k && (p.photos || {})[k]) await sendPhoto(p, k, who);
+      const ev = Core.evaluate(p, def, tw);
+      const summary = Object.assign({}, ev.counts, { highest: ev.highest, open: Core.check(p, def, tw).length, distance: Math.max(0, ...Object.values(p.photos || {}).map((x) => x.dist || 0)) });
+      const rev = p.rev || 0;
+      // sign every open change and seal the record with the sender's key
+      p.clock = { skewMin: clockSkew, device: settings.device || "", at: new Date().toISOString() };
+      await T.signAndSeal(p, secrets(), { id: who.id, device: settings.device || "" });
+      const j = await post({ action: "package", user: who.id, auth: who.secret, round: p.round, folder: folderOf(p), pkg: p, summary });
+      clockFrom(j.time);
+      // keep the signatures on this phone (only where the entry is still exactly what was signed)
+      const keepSigs = (q) => (q.audit || []).forEach((e, i) => { const sgn = (p.audit || [])[i]; if (sgn && sgn.s && !e.s && T.entryText(e) === T.entryText(sgn)) e.s = sgn.s; });
+      const fresh = await dbGet("insp", p.id); keepSigs(fresh); fresh.sentRev = Math.max(fresh.sentRev || 0, rev || 1); fresh.sentAt = new Date().toISOString();
+      await dbPut("insp", fresh); if (cur && cur.id === p.id) { keepSigs(cur); cur.sentRev = fresh.sentRev; cur.sentAt = fresh.sentAt; }
+      if (j.alerts) toast("Sev 3 alert sent to the E&I Engineer");
+    };
+    const trouble = async (p, who, e) => {
+      const m = e.message || String(e);
+      if (/^HELD BY/.test(m)) {
+        heldIds.add(p.id);
+        const fresh = await dbGet("insp", p.id); fresh.heldBy = m.replace(/^HELD BY\s*/, ""); await dbPut("insp", fresh);
+        if (cur && cur.id === p.id) { cur.heldBy = fresh.heldBy; if (view === "insp") refreshTabs(); }
+        toast(p.structure + " is now being continued by " + fresh.heldBy.split(" –")[0] + " – your copy is read-only", 6000); return;
       }
-      lastSync = new Date(); lastErr = "";
-      if (loud) toast(sent ? sent + " item(s) sent" : "Everything already sent");
+      if (refused(e)) { stop = { e, who }; return; }
+      failed++; if (!firstErr) firstErr = p.structure + " " + Core.formCode(p.form) + ": " + m;
+      if (/fetch|network|Load failed/i.test(m) || !navigator.onLine) { if (++netFails >= 3) stop = { e, net: true }; } else netFails = 0;
+    };
+    try {
+      const all = (await dbAll("insp")).filter((p) => !p.heldBy);
+      // 1) checklist data
+      for (const p of all) {
+        if (stop) break;
+        if (!((p.sentRev || 0) < (p.rev || 0) || !p.sentRev)) continue;
+        const who = uploaderFor(p); if (!who) continue;
+        try { await sendPkg(p, who); sent++; netFails = 0; } catch (e) { await trouble(p, who, e); }
+      }
+      // 2) photos – three at a time
+      const jobs = [];
+      for (const p of all) {
+        if (heldIds.has(p.id)) continue; const who = uploaderFor(p); if (!who) continue;
+        for (const k of Object.keys(p.photos || {})) { const r = await dbGet("photos", p.id + "/" + k); if (r && !r.uploaded && r.orig) jobs.push([p, k, who]); }
+      }
+      let n = 0;
+      const worker = async () => { while (!stop && n < jobs.length) { const [p, k, who] = jobs[n++]; if (heldIds.has(p.id)) continue;
+        try { if (await sendPhoto(p, k, who)) { sent++; netFails = 0; if (sent % 5 === 0) updateSyncBadge(); } } catch (e) { await trouble(p, who, e); } } };
+      await Promise.all([worker(), worker(), worker()]);
+      lastSync = new Date(); lastErr = stop && stop.e ? stop.e.message : firstErr;
+      if (loud) toast(failed || stop ? sent + " sent, " + (failed || 1) + " not sent (" + lastErr + ") – will retry" : sent ? sent + " item(s) sent" : "Everything already sent");
+      if (failed && !stop) { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(false), 15000); }
     } catch (e) {
       lastErr = e.message;
-      if (refused(e) && who) { syncing = false; await withdrawn(who.id, who.name + ": " + e.message); }
-      else if (loud) toast("Send failed: " + e.message + " – will retry");
+      if (loud) toast("Send failed: " + e.message + " – will retry");
     }
-    finally { syncing = false; updateSyncBadge(); }
+    finally { syncing = false; _workAt = 0; updateSyncBadge(); }
+    if (stop && stop.who) await withdrawn(stop.who.id, stop.who.name + ": " + stop.e.message);
   }
   async function updateSyncBadge() {
     const el = $("#sync"); if (!el) return;
@@ -3553,7 +3581,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     // green = online and everything sent · orange = sending / waiting to send · red = no communication with the office
     const red = off || !!lastErr || !settings.endpoint, orange = !red && (syncing || n > 0);
     const col = red ? "#E53935" : orange ? "#FB8C00" : "#2ECC71";
-    const txt = syncing ? "Sending…" : red ? (n ? n + " held – no link" : "No link") : n ? n + " to send" : "Online · synced";
+    const txt = syncing ? "Sending… " + (n || "") : red ? (off || !settings.endpoint ? (n ? n + " held – no link" : "No link") : n + " to send – retrying") : n ? n + " to send" : "Online · synced";
     el.innerHTML = `<i class="dot" style="background:${col};box-shadow:0 0 0 3px ${col}44,0 0 8px ${col}"></i>${esc(txt)}`;
     el.title = off ? "No signal – everything is kept on this phone and sent later" : lastErr ? "Last error: " + lastErr : lastSync ? "Last sent " + OMT(lastSync.toISOString()).slice(11, 16) : "";
     el.style.background = "rgba(255,255,255,.08)"; el.classList.toggle("pulse", syncing);
@@ -3916,7 +3944,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     MFCall.init({ post: async (b) => (await fetch(settings.endpoint, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(b) })).json(),
       auth: () => { const u = signer(); return u ? { user: u.id, auth: u.secret, device: settings.device || "" } : {}; },
       ready: () => !!(signer() && settings.endpoint && navigator.onLine), toast: (m) => toast(m, 4500), facing: "environment" });
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) beat(); });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { keepAwake(); beat(); syncNow(false); } });
+    keepAwake(); setInterval(keepAwake, 30000); document.addEventListener("click", keepAwake, { passive: true });
     setInterval(() => loadConfig().then(() => { if (view === "home") home(); }), 300000);
     await loadConfig();
     locked = true; signInView(); updateSyncBadge(); syncNow(false);
