@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.2";
+  const APP_VERSION = "1.6.3";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2169,7 +2169,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const savePeople = () => dbPut("kv", people, "people");
   const secrets = () => Object.fromEntries(Object.values(people).filter((p) => p.secret).map((p) => [p.id, p.secret]));
   const whoAmI = () => (me ? { id: me.id, name: me.name, device: settings.device || "" } : null);
-  function touch() { clearTimeout(idleTimer); if (me && !locked) idleTimer = setTimeout(() => { if (cur) dbPut("insp", cur); lock("Locked after " + IDLE_MIN + " minutes"); }, IDLE_MIN * 60000); }
+  function touch() { clearTimeout(idleTimer); /* v1.6.3 (Chief 14-Nov): no automatic lock after 20 minutes – the app stays open while it is on the screen */ }
 
   function updateWho() { const el = $("#who"); if (el) el.textContent = me && !locked ? "👤 " + me.name.split(" ")[0] : "🔒"; }
   async function pinHash(pin, salt) { return T.sha256("PIN|" + salt + "|" + pin); }
@@ -2459,7 +2459,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <div id="ntinfo" class="muted" style="margin-top:6px"></div>
         <div class="row" style="margin-top:12px"><button class="btn pri grow" id="start">Start inspection</button><button class="btn" id="near">Nearest tower</button><button class="btn" id="navgo">🧭 Directions</button></div>
       </div>
-      <div class="card"><h2>On this phone</h2><button class="btn pri" id="sendNow" style="width:100%;margin:4px 0 10px">⬆ Send now</button><div class="list" id="mine"></div><div id="space"></div></div>
+      <div class="card"><h2>On this phone</h2><button class="btn pri" id="sendNow" style="width:100%;margin:4px 0 4px">⬆ Send now</button><div id="awake" class="muted" style="font-size:13px;margin:0 0 8px"></div><input id="find" type="search" placeholder="🔍 Search tower, e.g. 120" autocomplete="off" style="width:100%;margin-bottom:6px"><div class="seg small" id="findSt" style="margin:0 0 8px"><button data-v="">All</button><button data-v="open">In progress</button><button data-v="done">Complete</button><button data-v="wait">Not sent</button></div><div class="list" id="found"></div><div class="list" id="mine"></div><div id="space"></div></div>
       ${isLead() ? `<div class="card"><h2>Team inspections</h2><div class="list" id="team"></div></div>` : ""}
       <p class="ver">Version ${APP_VERSION}</p>`;
     const norm = (v) => { v = (v || "").trim().toUpperCase(); if (/^\d+$/.test(v)) return "T" + v.padStart(3, "0"); return v; };
@@ -2522,6 +2522,11 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       } finally { _starting = false; const _b = $("#start"); if (_b) _b.disabled = false; }
     };
     renderDash(all); renderNext(all); renderMine(all); if (isLead()) renderTeam(all);
+    awakeShow(_awakeState || "on"); keepAwake();
+    const reFind = async () => { const a3 = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || "")); renderMine(a3); if (isLead()) renderTeam(a3); };
+    const stBtns = () => $("#findSt").querySelectorAll("button").forEach((x) => { const on = x.dataset.v === findQ.st; x.classList.toggle("on", on); x.classList.toggle("ok", on); });
+    $("#find").value = findQ.q; $("#find").oninput = () => { findQ.q = $("#find").value; reFind(); };
+    $("#findSt").querySelectorAll("button").forEach((b) => (b.onclick = () => { findQ.st = b.dataset.v; stBtns(); reFind(); })); stBtns();
     nextTimer = setInterval(async () => { if (view !== "home") return clearInterval(nextTimer); renderNext(await dbAll("insp")); }, 20000);
     loadTeamStatus().then(async () => {
       if (view !== "home" || !$("#nt")) return;
@@ -3354,6 +3359,36 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     pane.querySelectorAll("[data-ls]").forEach((g) => g.querySelectorAll("button").forEach((b) => (b.onclick = () => { const cv = getPath(cur, g.dataset.ls); setPath(cur, g.dataset.ls, cv === b.dataset.v ? "" : b.dataset.v); save(); redraw ? redraw() : renderLog(); })));
   }
 
+  /** v1.6.3 (Chief 14-Nov): one line per instrument image – the number as shown on the camera / imager and what it shows.
+   *  row.images keeps all numbers joined (the engine, the camera-drop import and the log sheets read it);
+   *  row.imagesText keeps number + what. */
+  const IMG_WHAT = ["L1 phases", "L2 phases", "L1 + L2", "Jumper", "Earthwire / OPGW", "Hardware", "Other"];
+  function imgRows(r) {
+    if (!Array.isArray(r.imgList)) r.imgList = r.images ? [{ no: String(r.images), what: "" }] : [];
+    if (!r.imgList.length) r.imgList.push({ no: "", what: "" });
+    return r.imgList;
+  }
+  function imgSync(r) {
+    const L = (r.imgList || []).filter((x) => (x.no || "").trim());
+    r.images = L.map((x) => x.no.trim()).join(", ");
+    r.imagesText = L.map((x) => x.no.trim() + (x.what ? " (" + x.what + ")" : "")).join(", ");
+  }
+  function imgListHtml(L) {
+    const rows = imgRows(cur.row);
+    return `<label class="f">${L.kind === "thermo" ? "Thermal camera images – number as shown on the camera" : "Acoustic imager images – number as shown on the imager"}</label>
+      <div id="imgList">${rows.map((x, i) => `<div class="row" style="flex-wrap:nowrap;gap:6px;margin-top:6px"><input data-img="${i}" value="${esc(x.no || "")}" placeholder="${L.kind === "thermo" ? "e.g. 140519" : "e.g. 0123"}" style="flex:1.2;min-width:0">
+        <select data-imgw="${i}" style="flex:1;min-width:0"><option value="">What it shows…</option>${IMG_WHAT.map((w) => `<option ${x.what === w ? "selected" : ""}>${esc(w)}</option>`).join("")}</select>
+        ${rows.length > 1 ? `<button class="btn sm" data-imgdel="${i}" title="Remove">✕</button>` : ""}</div>`).join("")}</div>
+      <button class="btn sm" id="imgAdd" style="margin-top:8px">＋ Add photo number</button>`;
+  }
+  function bindImgList(redraw) {
+    const r = cur.row;
+    document.querySelectorAll("[data-img]").forEach((el) => (el.oninput = () => { imgRows(r)[+el.dataset.img].no = el.value; imgSync(r); save(); }));
+    document.querySelectorAll("[data-imgw]").forEach((el) => (el.onchange = () => { imgRows(r)[+el.dataset.imgw].what = el.value; imgSync(r); save(); }));
+    document.querySelectorAll("[data-imgdel]").forEach((b) => (b.onclick = () => { imgRows(r).splice(+b.dataset.imgdel, 1); imgSync(r); save(); redraw(); }));
+    const add = document.getElementById("imgAdd");
+    if (add) add.onclick = () => { imgRows(r).push({ no: "", what: "" }); save(); redraw(); setTimeout(() => { const l = document.querySelectorAll("[data-img]"); if (l.length) l[l.length - 1].focus(); }, 50); };
+  }
   function logReading(pane, L, tw) {
     const r = cur.row, sev = Core.logSev(cur), mx = Core.rowMax(r);
     let html = `<div class="card"><h2>${esc(cur.structure)} – ${esc(tw.typeText || "")}</h2><div id="gps" class="gps"></div>
@@ -3371,7 +3406,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         ${L.kind === "thermo" ? `<div class="row" style="margin-top:8px">${lf("Jumper / Other (J, O, TL + note)", "row.jumper", "text", 'placeholder="e.g. J L2-B"')}${lf("its ΔT °C", "row.jumperVal")}</div>
           ${lseg("Compared with", "row.cmp", [["P", "P – similar phase"], ["A", "A – adjacent tower"], ["Amb", "Amb – ambient"]])}`
         : lseg("Discharge type (from the imager)", "row.dtype", [["None", "None"], ["C", "Corona"], ["EPD", "Ext. PD"], ["SPD", "Surface"], ["IPD", "Internal"], ["FPD", "Floating"]])}
-        ${lf(L.kind === "thermo" ? "Thermal camera image No(s). – as shown on the camera" : "Acoustic imager image No(s). – as shown on the imager", "row.images", "text", 'placeholder="e.g. 0453 or 0453-0456 or IR_0453"')}
+        ${imgListHtml(L)}
         
         ${lf("Remarks", "row.remarks", "text")}
         <p style="margin-top:10px">Max ${mx === null ? "–" : mx + (L.kind === "thermo" ? " °C" : " dB")} → <span class="pill ${sev ? "s" + sev : "ok"}">Sev ${sev}</span>
@@ -3386,6 +3421,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     }
     pane.innerHTML = html;
     bindLog(pane, () => logReading(pane, L, tw));
+    if (L.kind !== "night") bindImgList(() => logReading(pane, L, tw));
     // a typed value replaces ✓ / NV
     pane.querySelectorAll("input[data-lp^='row.ph.']").forEach((el) => (el.onchange = () => { setPath(cur, el.dataset.lp, el.value === "" ? "" : +el.value); save(); renderLog(); }));
     $("#tnow").onclick = () => { cur.row.time = nowHM(); save(); logReading(pane, L, tw); };
@@ -3495,8 +3531,36 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const uploaderFor = (p) => (people[p.lastUser] && people[p.lastUser].secret ? people[p.lastUser] : me && me.secret ? me : Object.values(people).find((x) => x.secret) || null);
   const refused = (e) => /ACCESS WITHDRAWN|Wrong personal key|Unknown person/.test(e.message || "");
   /** v1.6.2 (Chief 13-Nov): keep the screen on while the app is open, so Android does not put the tablet to sleep and cut the link. */
-  let _awake = null;
-  async function keepAwake() { try { if (!navigator.wakeLock || document.hidden || (_awake && !_awake.released)) return; _awake = await navigator.wakeLock.request("screen"); } catch (e) {} }
+  /** v1.6.3 (Chief 14-Nov): the screen stays on whenever the DPC app is open. It may sleep only when the battery is
+   *  below 30 % and the tablet is not charging. Wake Lock first; a silent 1-pixel looping video as the fallback. */
+  let _awake = null, _batt = null, _awakeState = "", _vid = null;
+  try { navigator.getBattery && navigator.getBattery().then((b) => { _batt = b; b.onlevelchange = b.onchargingchange = () => keepAwake(); keepAwake(); }); } catch (e) {}
+  const battLow = () => !!(_batt && !_batt.charging && _batt.level < 0.30);
+  function awakeShow(st) {
+    _awakeState = st; const el = document.getElementById("awake"); if (!el) return;
+    el.innerHTML = st === "on" ? "☀ Screen stays on while the app is open" : st === "low" ? "🔋 Battery below 30 % – the screen may now sleep. Put the tablet on charge." : "⚠ The tablet refused to keep the screen on – switch off Battery saver.";
+    el.style.color = st === "on" ? "#2e7d32" : "#c62828";
+  }
+  function vidOn(on) {
+    try {
+      if (!on) { if (_vid) { _vid.pause(); _vid.remove(); _vid = null; } return; }
+      if (_vid) { if (_vid.paused) _vid.play().catch(() => {}); return; }
+      _vid = document.createElement("video"); _vid.setAttribute("playsinline", ""); _vid.muted = true; _vid.loop = true;
+      _vid.style.cssText = "position:fixed;width:1px;height:1px;opacity:0.01;left:0;bottom:0;pointer-events:none";
+      _vid.src = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMpbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAB9AAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAlN0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAB9AAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAfQAAAAAAABAAAAAAHLbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAgABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABdm1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAATZzdGJsAAAAtnN0c2QAAAAAAAAAAQAAAKZhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABFUxhdmM2MC4zMS4xMDIgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAALGF2Y0MBQsAK/+EAFWdCwAraewEQAAADABAAAAMAIPEiagEABGjOD8gAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAAKMAAACjAAAAAYc3R0cwAAAAAAAAABAAAAAgAAQAAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAAAgAAAAEAAAAcc3RzegAAAAAAAAAAAAAAAgAAAoMAAAAJAAAAFHN0Y28AAAAAAAAAAQAAA1kAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYwLjE2LjEwMAAAAAhmcmVlAAAClG1kYXQAAAJtBgX//2ncRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY0IHIzMTA4IDMxZTE5ZjkgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDIzIC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MSBtZT1oZXggc3VibWU9MiBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0wIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MCA4eDhkY3Q9MCBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0wIHRocmVhZHM9MSBsb29rYWhlYWRfdGhyZWFkcz0xIHNsaWNlZF90aHJlYWRzPTAgbnI9MCBkZWNpbWF0ZT0xIGludGVybGFjZWQ9MCBibHVyYXlfY29tcGF0PTAgY29uc3RyYWluZWRfaW50cmE9MCBiZnJhbWVzPTAgd2VpZ2h0cD0wIGtleWludD0yNTAga2V5aW50X21pbj0xIHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9MTAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAAADmWIhAW///8PRQABT3+AAAAABUGaIBX1"; document.body.appendChild(_vid); _vid.play().catch(() => {});
+    } catch (e) {}
+  }
+  async function keepAwake() {
+    if (document.hidden) return;
+    if (battLow()) { try { if (_awake && !_awake.released) await _awake.release(); } catch (e) {} _awake = null; vidOn(false); return awakeShow("low"); }
+    if (navigator.wakeLock) {
+      try {
+        if (!_awake || _awake.released) { _awake = await navigator.wakeLock.request("screen"); _awake.addEventListener("release", () => setTimeout(keepAwake, 1000)); }
+        vidOn(false); return awakeShow("on");
+      } catch (e) { /* refused, e.g. battery saver – try the video fallback */ }
+    }
+    vidOn(true); awakeShow(_vid && !_vid.paused ? "on" : "off");
+  }
   /** v1.6.2: checklist data goes first (small, the office sees the readings within minutes), then the photos three at a time.
    *  One item that fails is skipped and tried again on the next pass – it no longer holds back everything behind it.
    *  A record with a Sev 3 defect still sends that defect's photo ahead of the record, so the alert e-mail carries it. */
@@ -3827,8 +3891,28 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     el.innerHTML = `<div class="nx"><div class="grow"><div class="lbl">${fix ? "Nearest tower not yet inspected" : "Next tower not yet inspected"}</div><div class="tw">${esc(pick.t.id)}</div><div class="sub2">${esc(pick.t.typeText)}${dist ? "<br>" + esc(dist) : ""}</div></div><button class="btn acc" id="goNext">Start ${esc(pick.t.id)}</button></div>`;
     $("#goNext").onclick = () => { $("#nf").value = settings.option; $("#nf").onchange(); $("#nt").value = pick.t.id; $("#nt").oninput(); $("#start").click(); };
   }
+  /** v1.6.3 (field 14-Nov): search the towers on this phone and the team's records. */
+  const findQ = { q: "", st: "" };
+  const findTok = () => { const v = (findQ.q || "").trim().toUpperCase(); return /^\d+$/.test(v) ? "T" + v.padStart(3, "0") : v; };
+  const findHit = (structure, form) => {
+    const v = (findQ.q || "").trim().toUpperCase(); if (!v) return true;
+    const s = (structure || "").toUpperCase();
+    return s === findTok() || s.includes(v) || (Core.formCode(form) || "").toUpperCase().includes(v);
+  };
   async function renderMine(all) {
     const el = $("#mine"); if (!el) return;
+    renderFound(all);
+    if (findQ.q || findQ.st) {
+      const want = [];
+      for (const p of all) {
+        if (!findHit(p.structure, p.form)) continue;
+        if (findQ.st === "open" && (p.status === "complete" || p.heldBy)) continue;
+        if (findQ.st === "done" && p.status !== "complete") continue;
+        if (findQ.st === "wait" && !(await pendingCount(p))) continue;
+        want.push(p);
+      }
+      all = want;
+    }
     const rows = [], removable = []; let waiting = 0;
     for (const p of all) {
       const def = DEFS[p.form], ev = Core.evaluate(p, def, structOf(p.form, p.structure) || TW[p.structure]);
@@ -3840,7 +3924,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <div class="muted">${def ? ev.counts.checked + "/" + total + " points" : esc((LOGF[p.form] || {}).title || "")} – ${ev.photos.length} photos – ${(p.defects || []).length} defects</div><div class="bar"><i style="width:${pct}%"></i></div>
         <div class="sy ${pend ? "up" : "ok"}">${pend ? "⇡ " + pend + " waiting for signal" : "✓ Saved to office"}${pend ? "" : ` <button class="lnk" data-rm="${esc(p.id)}">Remove from phone</button>`}</div></div></div>`);
     }
-    el.innerHTML = rows.join("") || '<div class="empty">No inspections on this phone.</div>';
+    el.innerHTML = rows.join("") || (findQ.q || findQ.st ? '<div class="empty">No match on this phone.</div>' : '<div class="empty">No inspections on this phone.</div>');
     el.querySelectorAll("[data-open]").forEach((x) => (x.onclick = (e) => { if (!e.target.closest("[data-rm]")) openInsp(x.dataset.open); }));
     el.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = async (e) => {
       e.stopPropagation(); const p = all.find((x) => x.id === b.dataset.rm); if (!p) return;
@@ -3856,9 +3940,23 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     };
   }
   async function removeLocal(p) { for (const k of Object.keys(p.photos || {})) await dbDel("photos", p.id + "/" + k); await dbDel("insp", p.id); }
+  /** Team records that match the search but are not on this phone – tap to continue them. */
+  function renderFound(all) {
+    const el = $("#found"); if (!el) return;
+    if (!findQ.q || findQ.st === "wait") { el.innerHTML = ""; return; }
+    const here = new Set(all.map((p) => p.structure + "_" + Core.formCode(p.form)));
+    const L = (teamStatus.round === settings.round ? Object.values(teamStatus.list || {}) : []).filter((e) => findHit(e.structure, e.form) && !here.has(e.structure + "_" + Core.formCode(e.form))
+      && !(findQ.st === "open" && e.status === "complete") && !(findQ.st === "done" && e.status !== "complete"));
+    el.innerHTML = L.length ? '<div class="muted" style="margin:2px 0 4px">Team records – not on this phone</div>' + L.map((e) => `<div class="it" data-cont="${esc(e.structure)}" data-form="${esc(e.form)}"><div class="t">${esc(e.structure)}</div><div class="grow"><div><b>${esc(Core.formCode(e.form))}</b> ${e.status === "complete" ? '<span class="pill ok">Complete</span>' : '<span class="pill">In progress</span>'} ${+e.highest ? `<span class="pill s${+e.highest}">Sev ${+e.highest}</span>` : ""}</div>
+      <div class="muted">${esc(e.holderName || e.holder)} – ${esc(hm(e.updated))} – tap to continue</div></div></div>`).join("") : "";
+    el.querySelectorAll("[data-cont]").forEach((x) => (x.onclick = () => {
+      const nf = $("#nf"); if (nf && [...nf.options].some((o) => o.value === x.dataset.form)) { nf.value = x.dataset.form; nf.onchange(); }
+      $("#nt").value = x.dataset.cont; $("#nt").oninput(); $("#start").click();
+    }));
+  }
   function renderTeam(all) {
     const el = $("#team"); if (!el) return;
-    const L = teamStatus.round === settings.round ? Object.values(teamStatus.list || {}) : [];
+    const L = (teamStatus.round === settings.round ? Object.values(teamStatus.list || {}) : []).filter((e) => findHit(e.structure, e.form) && !(findQ.st === "open" && e.status === "complete") && !(findQ.st === "done" && e.status !== "complete"));
     L.sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
     el.innerHTML = L.length ? L.map((e) => `<div class="it" data-team="${esc(e.structure + "_" + Core.formCode(e.form))}"><div class="t">${esc(e.structure)}</div><div class="grow"><div><b>${esc(Core.formCode(e.form))}</b> ${e.status === "complete" ? '<span class="pill ok">Complete</span>' : '<span class="pill">In progress</span>'} ${+e.highest ? `<span class="pill s${+e.highest}">Sev ${+e.highest}</span>` : ""}</div>
       <div class="muted">${esc(e.holderName || e.holder)} – ${esc(hm(e.updated))}${e.defects ? " – " + e.defects + " defects" : ""}</div></div></div>`).join("") : `<div class="empty">${teamStatus.at ? "Nothing received yet this round." : "Needs signal."}</div>`;
