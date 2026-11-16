@@ -2124,7 +2124,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.3";
+  const APP_VERSION = "1.6.4";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -3661,7 +3661,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   function reviewBanner(p) {
     const r = reviewOf(p); if (!r || r.status !== "returned" || (p.sentAt && p.sentAt > r.time)) return "";
-    return `<div class="card" style="border:2px solid #c62828;background:#fff4f2"><h2 style="color:#c62828">Returned by the E&amp;I Engineer</h2><p>${esc(r.note)}</p><p class="muted">${esc(r.by || "")} · ${esc(r.time ? OMT(r.time).slice(0, 16) : "")}. Correct it, then press "Tower complete – send" again.</p></div>`;
+    return `<div class="card" style="border:2px solid #c62828;background:#fff4f2"><h2 style="color:#c62828">${/QA rule check/i.test(r.by || "") ? "Returned by the automatic QA check" : "Returned by " + esc(r.by || "the E&I Engineer")}</h2><p>${esc(r.note)}</p><p class="muted">${esc(r.time ? OMT(r.time).slice(0, 16) : "")}. Correct it, then press "Tower complete – send" again.</p></div>`;
   }
 
   /* ------------------------------ config from the office ------------------------------ */
