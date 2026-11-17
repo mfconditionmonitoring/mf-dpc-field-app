@@ -646,10 +646,10 @@ window.MF_ASSETS={};
       if (h.serial) setH("Serial No.", h.serial);
       if (h.calDue) setH("Calibration due", fmtDate(h.calDue));
       setH("DPC permit No.", h.permit || "");
-      if (H["Soil type"]) d.tickLabels(d.tc(H["Soil type"].t, H["Soil type"].r, H["Soil type"].c), h.soil || []);
+      if (H["Soil type"]) d.tickLabels(d.tc(H["Soil type"].t, H["Soil type"].r, H["Soil type"].c), [].concat(h.soil || []));
       if (H["Soil moisture"]) {
         const c = d.tc(H["Soil moisture"].t, H["Soil moisture"].r, H["Soil moisture"].c);
-        d.tickLabels(c, h.moisture || []);
+        d.tickLabels(c, [].concat(h.moisture || []));
         if (h.lastRain) d.replaceIn(c, "____", String(h.lastRain));
       }
       setH("Test date / time", [fmtDate(h.date), [h.timeFrom, h.timeTo].filter(Boolean).join(" – ")].filter(Boolean).join("  "));
@@ -1633,9 +1633,11 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   function gridRowSev(g, row, e) {
     // explicit entry wins; otherwise earth readings are graded against the row limit
     if (g.sevCol >= 0 && e[g.sevCol] !== undefined && e[g.sevCol] !== "") return +e[g.sevCol];
-    const ri = g.cols.findIndex((c) => /^Reading/.test(c)), li = g.cols.findIndex((c) => /^Limit/.test(c));
+    // CHK-11 rev 17-Nov-2026: the three-pin value, when taken, replaces the clamp reading
+    const ri = g.cols.findIndex((c) => /^Reading/.test(c)), li = g.cols.findIndex((c) => /^Limit/.test(c)), ti = g.cols.findIndex((c) => /^Three-pin/.test(c));
     if (ri >= 0) {
-      const v = e[ri] !== undefined ? e[ri] : "", lim = num(e[li] !== undefined && e[li] !== "" ? e[li] : row.fixed[li]);
+      const tp = ti >= 0 && e[ti] !== undefined && e[ti] !== "" ? e[ti] : "";
+      const v = tp !== "" ? tp : e[ri] !== undefined ? e[ri] : "", lim = num(e[li] !== undefined && e[li] !== "" ? e[li] : row.fixed[li]);
       if (String(v).toUpperCase() === "OL") return 3;
       if (num(v) != null && lim) { const x = num(v); return x <= lim ? 0 : x <= 2 * lim ? 1 : x <= 5 * lim ? 2 : 3; }
     }
@@ -2142,7 +2144,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.5";
+  const APP_VERSION = "1.6.6";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
