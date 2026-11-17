@@ -171,6 +171,13 @@ input.pin{font-size:26px;letter-spacing:10px;text-align:center;font-family:var(-
 .dash .stats div{background:rgba(255,255,255,.07);border-radius:10px;padding:8px 6px;text-align:center}
 .dash .stats b{display:block;font-family:var(--disp);font-size:24px;font-weight:700}.dash .stats span{font-size:11px;color:#A9BCC8}
 .dash .stats .w b{color:#FFB25C}.dash .stats .h b{color:#FF7A6E}
+.job{background:#fff;border:2px solid #0E5A73;border-radius:14px;padding:12px 12px 8px;margin-bottom:12px}
+.job .top{display:flex;align-items:flex-end;gap:10px}.job .top .p{font-family:var(--disp);font-weight:700;font-size:44px;line-height:.9;color:#0E5A73}
+.job .top .t{font-size:13px;color:#4c5d68}.job .dl{font-weight:700}.job .dl.late{color:#c62828}
+.job .bar{background:#e3ecef;border-radius:6px;height:9px;margin:8px 0 6px}.job .bar i{display:block;height:9px;border-radius:6px;background:#0E5A73}
+.job table{width:100%;border-collapse:collapse;font-size:12.5px}.job td{padding:4px 2px;border-top:1px solid #edf1f3}.job td.n{text-align:right;white-space:nowrap}
+.job tr.me td{background:#fff6e0}.nfjob{margin-top:8px;padding:8px 10px;border-radius:10px;background:#f2fbfe;border:1px solid #cfe3ea;font-size:13.5px}
+.nfjob b{color:#0E5A73}
 .next .nx{display:flex;align-items:center;gap:12px}
 .next .lbl{font-size:13px;color:var(--mut)}.next .tw{font-family:var(--disp);font-weight:700;font-size:34px;color:var(--navy);line-height:1}.next .sub2{font-size:13px;color:var(--mut)}
 .it .sy{font-size:12px;margin-top:4px}.it .sy.up{color:#B26A00}.it .sy.ok{color:var(--ok)}
@@ -2144,7 +2151,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.6";
+  const APP_VERSION = "1.6.7";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2467,12 +2474,13 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const all = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
     $("#title").textContent = "Round " + settings.round;
     $("#back").classList.add("hide");
-    app().innerHTML = `<section class="dash" id="dash"></section><div class="card next" id="nextCard"></div>
+    app().innerHTML = `<section class="dash" id="dash"></section><section class="job" id="job" style="display:none"></section><div class="card next" id="nextCard"></div>
       <div class="card" style="border:2px solid #0E5A73;background:#f2fbfe"><div class="row" style="gap:8px"><button class="btn pri grow" id="callChief" style="font-size:17px;padding:14px">📞 Call Chief</button><button class="btn grow" id="videoChief" style="font-size:17px;padding:14px">🎥 Video</button></div>
         <h2 style="margin:14px 0 4px">Team – call each other</h2><div id="teamCalls"></div></div>
       <div class="card"><h2>Start an inspection</h2>
         <label class="f">Form</label>
         <select id="nf"><option value="${esc(settings.option)}">${esc(FORM_TITLE[settings.option])}</option><option value="CHK-10">${FORM_TITLE["CHK-10"]}</option><option value="CHK-02">CHK-02 Thermography – structure row</option><option value="CHK-04">CHK-04 Corona / PD – structure row</option><option value="CHK-06">CHK-06 Night patrol – structure row</option>${REGISTRY.filter((e) => e.scope === "asset" && DEFS[e.id]).map((e) => `<option value="${esc(e.id)}">${esc(e.code + " " + e.title)}</option>`).join("")}</select>
+        <div class="nfjob" id="nfjob" style="display:none"></div>
         <label class="f" id="ntl">Tower / structure</label>
         <input id="nt" type="text" inputmode="numeric" list="tl" autocomplete="off">
         <datalist id="tl">${TOWERS.map((t) => `<option value="${t.id}">${t.typeText}</option>`).join("")}</datalist>
@@ -2486,7 +2494,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const optLabel = (id, base, f) => { const st = statusFor(id, f); return base + (st ? (st.status === "complete" ? " · ✅ done – " : " · 🟠 in progress – ") + (st.holderName || nameOfId(st.holder)).split(" ")[0] : ""); };
     const towerOptsFor = (f) => TOWERS.map((t) => `<option value="${t.id}">${esc(optLabel(t.id, t.typeText, f))}</option>`).join("");
     $("#nf").onchange = () => {
-      const f = $("#nf").value, A = isAssetForm(f);
+      const f = $("#nf").value, A = isAssetForm(f); try { renderNfJob(f); } catch (x) {}
       $("#ntl").textContent = A ? "Item inspected" : "Tower / structure";
       $("#nt").placeholder = A ? "Pick from the list, e.g. " + ((assetList(f)[0] || {}).id || "") : "Tower number, e.g. 4 or T004";
       $("#nt").setAttribute("inputmode", A ? "text" : "numeric");
@@ -2541,7 +2549,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       openInsp(p.id);
       } finally { _starting = false; const _b = $("#start"); if (_b) _b.disabled = false; }
     };
-    renderDash(all); renderNext(all); renderMine(all); if (isLead()) renderTeam(all);
+    renderDash(all); try { renderJob(); renderNfJob($("#nf").value); } catch (x) {} renderNext(all); renderMine(all); if (isLead()) renderTeam(all);
     awakeShow(_awakeState || "on"); keepAwake();
     const reFind = async () => { const a3 = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || "")); renderMine(a3); if (isLead()) renderTeam(a3); };
     const stBtns = () => $("#findSt").querySelectorAll("button").forEach((x) => { const on = x.dataset.v === findQ.st; x.classList.toggle("on", on); x.classList.toggle("ok", on); });
@@ -2551,7 +2559,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     loadTeamStatus().then(async () => {
       if (view !== "home" || !$("#nt")) return;
       const a2 = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
-      renderDash(a2); renderNext(a2); renderMine(a2); if (isLead()) renderTeam(a2);
+      renderDash(a2); try { renderJob(); renderNfJob($("#nf").value); } catch (x) {} renderNext(a2); renderMine(a2); if (isLead()) renderTeam(a2);
       const keep = $("#nt").value; $("#nf").onchange(); $("#nt").value = keep; $("#nt").oninput();
     });
   }
@@ -3900,6 +3908,31 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       <div class="big"><span class="n">${s.done}</span><span class="of">of ${s.total} towers<br>complete</span></div>
       <div class="thermo"><i style="width:${s.done ? Math.max(pct, 1.5) : 0}%"></i></div>
       <div class="stats"><div><b>${s.prog}</b><span>In progress</span></div><div><b>${s.defects}</b><span>Defects</span></div><div class="${s.s2 ? "w" : ""}"><b>${s.s2}</b><span>Sev 2 towers</span></div><div class="${s.s3 ? "h" : ""}"><b>${s.s3}</b><span>Sev 3 towers</span></div></div>`;
+  }
+  /* v1.6.7 (Chief 18-Nov): whole-job progress and target date, worked out by the office engine from every record received. */
+  const jobOf = () => (config && config.progress && config.progress.acts) ? config.progress : null;
+  const jobCode = (f) => (f || "").startsWith("CHK-01") ? "CHK-01" : f;
+  const jobDays = (J) => { const end = new Date(String(J.deadline) + "T23:59:59+04:00").getTime(); return Math.max(0, Math.ceil((end - Date.now()) / 86400000)); };
+  const jobDate = (d) => { try { return new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch (x) { return d; } };
+  function renderJob() {
+    const el = $("#job"), J = jobOf(); if (!el) return;
+    if (!J) { el.style.display = "none"; return; }
+    const left = jobDays(J), late = left <= 3 && J.field < 95, sel = jobCode(($("#nf") || {}).value || "");
+    el.style.display = "";
+    el.innerHTML = `<div class="top"><span class="p">${J.field}%</span><span class="t">of the whole job done (field)<br>Registers ${J.reg}%</span></div>
+      <div class="bar"><i style="width:${Math.min(100, J.field)}%"></i></div>
+      <div class="t" style="margin-bottom:6px">Target <span class="dl ${late ? "late" : ""}">${esc(jobDate(J.deadline))} · ${left} day${left === 1 ? "" : "s"} left</span></div>
+      <table>${J.acts.map((a) => `<tr class="${a.code === sel ? "me" : ""}"><td><b>${esc(a.code)}</b> ${esc(a.title)}</td><td class="n">${a.w}%</td><td class="n"><b>${a.field}%</b></td><td class="n">${a.left ? a.left + " left" : "✅"}</td><td class="n">${a.left && left ? Math.ceil(a.left / left) + "/day" : ""}</td></tr>`).join("")}</table>
+      <div class="t" style="font-size:11.5px;margin-top:4px">Weight = share of the whole job. Plan your days so every activity finishes by the target. Updated ${esc(J.at ? new Date(J.at).toTimeString().slice(0, 5) : "")} (office).</div>`;
+  }
+  function renderNfJob(f) {
+    const el = $("#nfjob"), J = jobOf(); if (!el) return;
+    const a = J && J.acts.find((x) => x.code === jobCode(f));
+    if (!a) { el.style.display = "none"; return; }
+    const left = jobDays(J);
+    el.style.display = "";
+    el.innerHTML = `<b>${esc(a.code)} ${esc(a.title)}</b> · weight <b>${a.w}%</b> of the job · completed <b>${a.field}%</b><br>${a.left ? `${a.left} ${esc(a.unit)} left · <b>${left ? Math.ceil(a.left / left) : a.left} per day</b> needed to finish by ${esc(jobDate(J.deadline))}` : "All done for this activity ✅"}`;
+    renderJob();
   }
   function renderNext(all) {
     const el = $("#nextCard"); if (!el) return;
