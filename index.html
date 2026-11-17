@@ -355,14 +355,21 @@ window.MF_ASSETS={};
     return { rows, highest, counts, photos, earth, defects: pkg.defects || [] };
   }
 
+  /* CHK-10 rev 17-Nov-2026: clamp-on reading on every lead (primary); three-pin only when the clamp reads OL or above the limit.
+   * The final value is the three-pin reading when taken, otherwise the clamp reading; result OK / Not OK against the limit. */
   function earthResults(pkg) {
     const e = pkg.earth || {};
     const lim = +(e.limit || 10);
     const rs = e.rows || [];
+    const has = (v) => v !== "" && v != null;
+    const norm = (v) => (has(v) ? (String(v).trim().toUpperCase() === "OL" ? "OL" : v) : "");
     const leads = [0, 1].map((i) => {
       const r = rs[i] || {};
-      const v = r.R62 === "OL" ? "OL" : r.R62;
-      return { leg: i === 0 ? e.lead1Leg : e.lead2Leg, value: v, sev: earthSev(v, lim), dev: maxDev(r.R62, r.R52, r.R72), tested: v !== "" && v != null, nv: !!r.nv };
+      const cl = norm(r.CL), tp = norm(r.R62), v = tp !== "" ? tp : cl;
+      let sev = earthSev(v, lim);
+      if (tp === "" && sev !== "" && sev > 2) sev = 2; // a clamp reading alone is not graded critical until the three-pin test confirms it
+      const ok = v === "" ? "" : v !== "OL" && +v <= lim ? "OK" : "Not OK";
+      return { leg: i === 0 ? e.lead1Leg : e.lead2Leg, value: v, clamp: cl, threePin: tp, ok, need3: tp === "" && ok === "Not OK", sev, dev: maxDev(r.R62, r.R52, r.R72), tested: v !== "", nv: !!r.nv };
     });
     return { limit: lim, leads };
   }
@@ -399,7 +406,7 @@ window.MF_ASSETS={};
     if (def.earthReadings) {
       const er = earthResults(pkg);
       er.leads.forEach((l, i) => {
-        if (l.sev !== "" && l.sev >= 1) push("ER/" + (i + 1), { point: "M", pos: "Lead " + (i + 1), loc: "Lead " + (i + 1) + (l.leg ? " – leg " + l.leg : ""), component: "Tower earth lead – earth resistance", sev: l.sev, result: "N", auto: true, desc: (old["ER/" + (i + 1)] || {}).desc || ("Earth resistance " + l.value + " Ω, above the " + er.limit + " Ω limit") });
+        if (l.sev !== "" && l.sev >= 1) push("ER/" + (i + 1), { point: "M", pos: "Lead " + (i + 1), loc: "Lead " + (i + 1) + (l.leg ? " – leg " + l.leg : ""), component: "Tower earth lead – earth resistance", sev: l.sev, result: "N", auto: true, desc: (old["ER/" + (i + 1)] || {}).desc || ((l.threePin !== "" ? "Three-pin" : "Clamp-on") + " reading " + (l.value === "OL" ? "OL" : l.value + " Ω") + ", above the " + er.limit + " Ω limit") });
       });
     }
     pkg.defects = out;
@@ -712,16 +719,22 @@ window.MF_ASSETS={};
           const leg = i === 0 ? e.lead1Leg : e.lead2Leg;
           if (leg) d.replaceIn(d.tc(t, row, 0), "____", leg);
         }
-        d.setText(d.tc(t, row, 1), r.C || "");
-        d.setText(d.tc(t, row, 2), r.P || "");
-        d.setText(d.tc(t, row, 3), r.nv ? "NV" : (r.R62 || ""));
-        d.setText(d.tc(t, row, 4), r.R52 || "");
-        d.setText(d.tc(t, row, 5), r.R72 || "");
-        d.setText(d.tc(t, row, 6), maxDev(r.R62, r.R52, r.R72) === "" ? "" : String(maxDev(r.R62, r.R52, r.R72)));
-        if (i < 2) {
-          d.setText(d.tc(t, row, 7), prev[i] != null ? prev[i] + " Ω – DPC 2024 survey" : "–");
-          d.setText(d.tc(t, row, 8), String(er.limit));
-          d.setText(d.tc(t, row, 9), er.leads[i].sev === "" ? "" : String(er.leads[i].sev));
+        // cells are found by column heading, so the 17-Nov layout (clamp-on / three-pin / result) and the older 62 % layout both fill
+        const cols = def.earthReadings.cols || [], at = (re) => cols.findIndex((c) => re.test(String(c).replace(/\s+/g, " ")));
+        const put = (re, v) => { const c = at(re); if (c > 0) d.setText(d.tc(t, row, c), v); };
+        const L = i < 2 ? er.leads[i] : null;
+        put(/^C distance/, r.C || "");
+        put(/^P at 62/, r.P || "");
+        put(/^Clamp-on/, r.nv ? "NV" : (r.CL || ""));
+        put(/^(R at 62|Three-pin)/, r.nv ? (at(/^Clamp-on/) > 0 ? "" : "NV") : (r.R62 || ""));
+        put(/^R at 52/, r.R52 || "");
+        put(/^R at 72/, r.R72 || "");
+        put(/deviation/i, maxDev(r.R62, r.R52, r.R72) === "" ? "" : String(maxDev(r.R62, r.R52, r.R72)));
+        if (L) {
+          put(/^Result/, r.nv ? "NV" : L.ok);
+          put(/^Previous/, prev[i] != null ? prev[i] + " Ω – DPC 2024 survey" : "–");
+          put(/^Limit/, String(er.limit));
+          put(/^Sev$/, L.sev === "" ? "" : String(L.sev));
         }
       });
     }
@@ -1089,7 +1102,12 @@ window.MF_ASSETS={};
     });
     if (def.earthReadings) {
       const rs = (pkg.earth || {}).rows || [];
-      [0, 1].forEach((i) => { const r = rs[i] || {}; if (!r.nv && (r.R62 === "" || r.R62 == null)) issues.push("Lead " + (i + 1) + " – R at 62 % not entered"); });
+      void rs;
+      earthResults(pkg).leads.forEach((l, i) => {
+        if (l.nv) return;
+        if (!l.tested) issues.push("Lead " + (i + 1) + " – clamp-on reading not entered");
+        else if (l.need3) issues.push("Lead " + (i + 1) + " – clamp reading " + (l.clamp === "OL" ? "OL" : l.clamp + " Ω") + " is above the " + (+((pkg.earth || {}).limit || 10)) + " Ω limit – take the three-pin reading");
+      });
     }
     return issues;
   }
@@ -2124,7 +2142,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.4";
+  const APP_VERSION = "1.6.5";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2156,8 +2174,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
 
   const DEFAULT_ENDPOINT = "https://script.google.com/macros/s/AKfycbxuPdXOYLwRY085kDTyEg6QP6jVAPlGdMjYBS2CX2f06pFBCFuBhNXP_mluxZv_DEvfUA/exec";
   const CALL_LINE = "https://meet.google.com/sbi-dasn-rvt";
-  let settings = { round: "2026B", option: "CHK-01A", inspectors: "MF Inspector 1, MF Inspector 2", inspector: "", verifier: "Shafaqat Ali", earthLimit: 10, instrument: "Hioki FT6031 earth tester", serial: "241104390", calDue: "2026-12-23", endpoint: DEFAULT_ENDPOINT, key: "", device: "", freeSpace: true };
-  async function loadSettings() { const s = await dbGet("kv", "settings"); if (s) settings = Object.assign(settings, s); if (!settings.endpoint) settings.endpoint = DEFAULT_ENDPOINT; }
+  let settings = { round: "2026B", option: "CHK-01A", inspectors: "MF Inspector 1, MF Inspector 2", inspector: "", verifier: "Shafaqat Ali", earthLimit: 10, instrument: "Fluke clamp-on earth tester; Hioki FT6031 (three-pin)", serial: "241104390", calDue: "2026-12-23", endpoint: DEFAULT_ENDPOINT, key: "", device: "", freeSpace: true };
+  async function loadSettings() { const s = await dbGet("kv", "settings"); if (s) settings = Object.assign(settings, s); if (settings.instrument === "Hioki FT6031 earth tester") settings.instrument = "Fluke clamp-on earth tester; Hioki FT6031 (three-pin)"; if (!settings.endpoint) settings.endpoint = DEFAULT_ENDPOINT; }
   const saveSettings = () => dbPut("kv", settings, "settings");
 
   /* ------------------------------ personal sign-in ------------------------------ */
@@ -2824,17 +2842,18 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const rowHtml = (i, title) => {
       const r = e.rows[i] || (e.rows[i] = {});
       const leg = i < 2 ? `<label class="f">Leg</label><div class="seg small" data-leg="${i}">${Core.LEGS.map((l) => `<button class="${(i ? e.lead2Leg : e.lead1Leg) === l ? "on ok" : ""}" data-v="${l}">${l}</button>`).join("")}</div>` : "";
-      const lr = er.leads[i];
+      const lr = i < 2 ? er.leads[i] : null;
+      const res = lr && lr.ok ? `<span class="pill ${lr.ok === "OK" ? "ok" : "s2"}">${lr.ok}</span>` : "";
       return `<div class="card"><h2>${title}</h2>${leg}
-        <div class="row"><div class="grow"><label class="f">C distance m</label><input type="number" inputmode="decimal" data-er="${i}" data-f="C" value="${esc(r.C ?? "")}"></div><div class="grow"><label class="f">P at 62 % m</label><input type="number" inputmode="decimal" data-er="${i}" data-f="P" value="${esc(r.P ?? "")}"></div></div>
-        <div class="row"><div class="grow"><label class="f">R at 62 % Ω ${i < 2 ? "(or OL)" : ""}</label><input type="text" inputmode="decimal" data-er="${i}" data-f="R62" value="${esc(r.R62 ?? "")}"></div><div class="grow"><label class="f">R at 52 % Ω</label><input type="number" inputmode="decimal" data-er="${i}" data-f="R52" value="${esc(r.R52 ?? "")}"></div><div class="grow"><label class="f">R at 72 % Ω</label><input type="number" inputmode="decimal" data-er="${i}" data-f="R72" value="${esc(r.R72 ?? "")}"></div></div>
-        ${i < 2 ? `<div class="row" style="margin-top:8px"><label class="chk"><label class="${r.nv ? "on" : ""}"><input type="checkbox" data-nv="${i}" ${r.nv ? "checked" : ""}>Not tested / NV</label></label>
-          <span class="grow"></span><span>Dev ${lr.dev === "" ? "–" : lr.dev + " %"}</span> ${lr.sev === "" ? "" : `<span class="pill ${lr.sev ? "s" + lr.sev : "ok"}">Sev ${lr.sev}</span>`}</div>
-          <div class="muted">2024 survey: ${prev[i] != null ? prev[i] + " Ω" : "–"} · limit ${er.limit} Ω${lr.dev !== "" && lr.dev > 5 ? " · <b style='color:#c62828'>52/72 % readings differ by more than 5 % – check electrode spacing</b>" : ""}</div>` : ""}
+        <div class="row"><div class="grow"><label class="f">Clamp-on Ω (or OL)</label><input type="text" inputmode="decimal" data-er="${i}" data-f="CL" value="${esc(r.CL ?? "")}"></div>
+        <div class="grow"><label class="f">Three-pin Ω – only if clamp OL or above ${er.limit} Ω</label><input type="text" inputmode="decimal" data-er="${i}" data-f="R62" value="${esc(r.R62 ?? "")}"></div></div>
+        ${lr ? `<div class="row" style="margin-top:8px"><label class="chk"><label class="${r.nv ? "on" : ""}"><input type="checkbox" data-nv="${i}" ${r.nv ? "checked" : ""}>Not tested / NV</label></label>
+          <span class="grow"></span>${res} ${lr.sev === "" ? "" : `<span class="pill ${lr.sev ? "s" + lr.sev : "ok"}">Sev ${lr.sev}</span>`}</div>
+          <div class="muted">2024 survey: ${prev[i] != null ? prev[i] + " Ω" : "–"} · limit ${er.limit} Ω${lr.need3 ? " · <b style='color:#c62828'>Clamp reading above the limit – take the three-pin reading</b>" : ""}</div>` : ""}
       </div>`;
     };
     pane.innerHTML = rowHtml(0, "Lead 1") + rowHtml(1, "Lead 2") + rowHtml(2, "Both leads connected – information only");
-    pane.querySelectorAll("[data-er]").forEach((el) => (el.onchange = () => { e.rows[+el.dataset.er][el.dataset.f] = el.value.trim().toUpperCase() === "OL" ? "OL" : el.value; save(); paneEarth(pane, def, tw); }));
+    pane.querySelectorAll("[data-er]").forEach((el) => (el.onchange = () => { e.rows[+el.dataset.er][el.dataset.f] = el.value.trim().toUpperCase() === "OL" ? "OL" : el.value.trim(); save(); paneEarth(pane, def, tw); }));
     pane.querySelectorAll("[data-leg]").forEach((g) => g.querySelectorAll("button").forEach((b) => (b.onclick = () => { if (g.dataset.leg === "0") e.lead1Leg = b.dataset.v; else e.lead2Leg = b.dataset.v; save(); paneEarth(pane, def, tw); })));
     pane.querySelectorAll("[data-nv]").forEach((c) => (c.onchange = () => { e.rows[+c.dataset.nv].nv = c.checked; save(); paneEarth(pane, def, tw); }));
   }
