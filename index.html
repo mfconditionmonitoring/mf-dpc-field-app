@@ -171,12 +171,24 @@ input.pin{font-size:26px;letter-spacing:10px;text-align:center;font-family:var(-
 .dash .stats div{background:rgba(255,255,255,.07);border-radius:10px;padding:8px 6px;text-align:center}
 .dash .stats b{display:block;font-family:var(--disp);font-size:24px;font-weight:700}.dash .stats span{font-size:11px;color:#A9BCC8}
 .dash .stats .w b{color:#FFB25C}.dash .stats .h b{color:#FF7A6E}
-.job{background:#fff;border:2px solid #0E5A73;border-radius:14px;padding:12px 12px 8px;margin-bottom:12px}
-.job .top{display:flex;align-items:flex-end;gap:10px}.job .top .p{font-family:var(--disp);font-weight:700;font-size:44px;line-height:.9;color:#0E5A73}
-.job .top .t{font-size:13px;color:#4c5d68}.job .dl{font-weight:700}.job .dl.late{color:#c62828}
-.job .bar{background:#e3ecef;border-radius:6px;height:9px;margin:8px 0 6px}.job .bar i{display:block;height:9px;border-radius:6px;background:#0E5A73}
-.job table{width:100%;border-collapse:collapse;font-size:12.5px}.job td{padding:4px 2px;border-top:1px solid #edf1f3}.job td.n{text-align:right;white-space:nowrap}
-.job tr.me td{background:#fff6e0}.nfjob{margin-top:8px;padding:8px 10px;border-radius:10px;background:#f2fbfe;border:1px solid #cfe3ea;font-size:13.5px}
+.job{background:linear-gradient(160deg,#0E5A73 0%,#0B3D52 55%,#0A2F40 100%);color:#fff;border-radius:16px;padding:14px 14px 10px;margin-bottom:12px;box-shadow:0 6px 18px rgba(10,47,64,.25)}
+.job .top{display:flex;align-items:center;gap:14px}
+.job .ring{--p:0;width:92px;height:92px;border-radius:50%;flex:0 0 92px;display:grid;place-items:center;background:conic-gradient(#FFB25C calc(var(--p)*1%),rgba(255,255,255,.14) 0)}
+.job .ring b{width:72px;height:72px;border-radius:50%;background:#0B3D52;display:grid;place-items:center;font-family:var(--disp);font-size:24px;font-weight:700}
+.job .lbl{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#9fc3d1}
+.job .tgt{font-family:var(--disp);font-size:22px;font-weight:700;line-height:1.1;margin:2px 0}
+.job .days{display:inline-block;margin-top:4px;padding:3px 10px;border-radius:20px;background:#FFB25C;color:#0A2F40;font-weight:700;font-size:14px}
+.job .days.late{background:#FF7A6E;color:#fff}
+.job .reg{font-size:12.5px;color:#b9d2dc;margin-top:4px}
+.job .acts{margin-top:12px;display:grid;gap:7px}
+.job .a{background:rgba(255,255,255,.07);border-radius:10px;padding:7px 9px}
+.job .a.me{background:rgba(255,178,92,.22);outline:2px solid #FFB25C}
+.job .a .h{display:flex;align-items:baseline;gap:6px;font-size:13.5px}
+.job .a .h .w{font-size:11px;padding:1px 6px;border-radius:8px;background:rgba(255,255,255,.15);color:#dbe9ef}
+.job .a .h .pc{margin-left:auto;font-family:var(--disp);font-weight:700;font-size:17px}
+.job .a .bb{height:7px;border-radius:5px;background:rgba(255,255,255,.14);margin:5px 0 4px;overflow:hidden}.job .a .bb i{display:block;height:7px;border-radius:5px}
+.job .a .ft{display:flex;justify-content:space-between;font-size:11.5px;color:#b9d2dc}.job .a .ft b{color:#fff}
+.nfjob{margin-top:8px;padding:8px 10px;border-radius:10px;background:#f2fbfe;border:1px solid #cfe3ea;font-size:13.5px}
 .nfjob b{color:#0E5A73}
 .next .nx{display:flex;align-items:center;gap:12px}
 .next .lbl{font-size:13px;color:var(--mut)}.next .tw{font-family:var(--disp);font-weight:700;font-size:34px;color:var(--navy);line-height:1}.next .sub2{font-size:13px;color:var(--mut)}
@@ -2151,7 +2163,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.7";
+  const APP_VERSION = "1.6.8";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -3918,12 +3930,14 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const el = $("#job"), J = jobOf(); if (!el) return;
     if (!J) { el.style.display = "none"; return; }
     const left = jobDays(J), late = left <= 3 && J.field < 95, sel = jobCode(($("#nf") || {}).value || "");
+    const col = (p) => (p >= 90 ? "#4CD08A" : p >= 50 ? "#FFB25C" : "#FF7A6E");
     el.style.display = "";
-    el.innerHTML = `<div class="top"><span class="p">${J.field}%</span><span class="t">of the whole job done (field)<br>Registers ${J.reg}%</span></div>
-      <div class="bar"><i style="width:${Math.min(100, J.field)}%"></i></div>
-      <div class="t" style="margin-bottom:6px">Target <span class="dl ${late ? "late" : ""}">${esc(jobDate(J.deadline))} · ${left} day${left === 1 ? "" : "s"} left</span></div>
-      <table>${J.acts.map((a) => `<tr class="${a.code === sel ? "me" : ""}"><td><b>${esc(a.code)}</b> ${esc(a.title)}</td><td class="n">${a.w}%</td><td class="n"><b>${a.field}%</b></td><td class="n">${a.left ? a.left + " left" : "✅"}</td><td class="n">${a.left && left ? Math.ceil(a.left / left) + "/day" : ""}</td></tr>`).join("")}</table>
-      <div class="t" style="font-size:11.5px;margin-top:4px">Weight = share of the whole job. Plan your days so every activity finishes by the target. Updated ${esc(J.at ? new Date(J.at).toTimeString().slice(0, 5) : "")} (office).</div>`;
+    el.innerHTML = `<div class="top"><div class="ring" style="--p:${Math.min(100, J.field)}"><b>${Math.round(J.field)}%</b></div>
+        <div><div class="lbl">Whole job done</div><div class="tgt">Target ${esc(jobDate(J.deadline))}</div>
+        <span class="days ${late ? "late" : ""}">⏳ ${left} day${left === 1 ? "" : "s"} left</span><div class="reg">Registers ${J.reg}%</div></div></div>
+      <div class="acts">${J.acts.map((a) => `<div class="a ${a.code === sel ? "me" : ""}"><div class="h"><b>${esc(a.code)}</b> ${esc(a.title)} <span class="w">${a.w}%</span><span class="pc" style="color:${col(a.field)}">${a.field}%</span></div>
+        <div class="bb"><i style="width:${Math.min(100, a.field)}%;background:${col(a.field)}"></i></div>
+        <div class="ft"><span>${a.left ? a.left + " " + esc(a.unit) + " left" : "✅ Done"}</span><span>${a.left && left ? "<b>" + Math.ceil(a.left / left) + "</b> per day" : ""}</span></div></div>`).join("")}</div>`;
   }
   function renderNfJob(f) {
     const el = $("#nfjob"), J = jobOf(); if (!el) return;
