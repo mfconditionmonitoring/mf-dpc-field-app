@@ -293,7 +293,7 @@ window.MF_ASSETS={};
   function applicable(app, tower, pkg) {
     const g = tower.group;
     if (app === "S") return g === "S";
-    if (app === "T") return g === "T";
+    if (app === "T") return g === "T" || g === "G";
     if (app === "J") return (pkg.header && pkg.header.opgwJoint) === "Yes";
     return true; // A and F (F decided on site)
   }
@@ -2163,7 +2163,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.8";
+  const APP_VERSION = "1.6.9";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2495,14 +2495,15 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <div class="nfjob" id="nfjob" style="display:none"></div>
         <label class="f" id="ntl">Tower / structure</label>
         <input id="nt" type="text" inputmode="numeric" list="tl" autocomplete="off">
-        <datalist id="tl">${TOWERS.map((t) => `<option value="${t.id}">${t.typeText}</option>`).join("")}</datalist>
+        <datalist id="tl">${TOWERS.slice().sort((a, b) => (+a.chainage || 0) - (+b.chainage || 0)).map((t) => `<option value="${t.id}">${t.id === "G-0" ? "Gantry 1 – Duqm transition station" : t.id === "G-RM" ? "Gantry 2 – Ras Markaz (after T240)" : t.typeText}</option>`).join("")}</datalist>
+        <div class="row" style="margin-top:8px;gap:8px"><button class="btn" id="gq1" type="button">Gantry 1 (Duqm)</button><button class="btn" id="gq2" type="button">Gantry 2 (Ras Markaz)</button></div>
         <div id="ntinfo" class="muted" style="margin-top:6px"></div>
         <div class="row" style="margin-top:12px"><button class="btn pri grow" id="start">Start inspection</button><button class="btn" id="near">Nearest tower</button><button class="btn" id="navgo">🧭 Directions</button></div>
       </div>
       <div class="card"><h2>On this phone</h2><button class="btn pri" id="sendNow" style="width:100%;margin:4px 0 4px">⬆ Send now</button><div id="awake" class="muted" style="font-size:13px;margin:0 0 8px"></div><input id="find" type="search" placeholder="🔍 Search tower, e.g. 120" autocomplete="off" style="width:100%;margin-bottom:6px"><div class="seg small" id="findSt" style="margin:0 0 8px"><button data-v="">All</button><button data-v="open">In progress</button><button data-v="done">Complete</button><button data-v="wait">Not sent</button></div><div class="list" id="found"></div><div class="list" id="mine"></div><div id="space"></div></div>
       ${isLead() ? `<div class="card"><h2>Team inspections</h2><div class="list" id="team"></div></div>` : ""}
       <p class="ver">Version ${APP_VERSION}</p>`;
-    const norm = (v) => { v = (v || "").trim().toUpperCase(); if (/^\d+$/.test(v)) return "T" + v.padStart(3, "0"); return v; };
+    const norm = (v) => { v = (v || "").trim().toUpperCase().replace(/\s+/g, ""); if (/^(G-?0|G-?1|GANTRY-?1|0|TS)$/.test(v)) return "G-0"; if (/^(G-?RM|G-?2|GANTRY-?2|RM|241)$/.test(v)) return "G-RM"; if (/^\d+$/.test(v)) return "T" + v.padStart(3, "0"); return v; };
     const optLabel = (id, base, f) => { const st = statusFor(id, f); return base + (st ? (st.status === "complete" ? " · ✅ done – " : " · 🟠 in progress – ") + (st.holderName || nameOfId(st.holder)).split(" ")[0] : ""); };
     const towerOptsFor = (f) => TOWERS.map((t) => `<option value="${t.id}">${esc(optLabel(t.id, t.typeText, f))}</option>`).join("");
     $("#nf").onchange = () => {
@@ -2534,6 +2535,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       let best = null; TOWERS.forEach((t) => { if (t.group === "G") return; const d = towerDist(t); if (best == null || d < best.d) best = { t, d }; });
       $("#nt").value = best.t.id; $("#nt").oninput(); toast("Nearest: " + best.t.id + " (" + best.d + " m)");
     };
+    [["#gq1", "G-0"], ["#gq2", "G-RM"]].forEach(([b, id]) => { const el = $(b); if (el) el.onclick = () => { if (isAssetForm($("#nf").value)) { $("#nf").value = "CHK-01A"; $("#nf").onchange(); } $("#nt").value = id; $("#nt").oninput(); }; });
     let _starting = false;
     $("#start").onclick = async () => {
       if (_starting) return; _starting = true;
@@ -2550,7 +2552,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         const pa = stampNew(newGeneric(form, aid), ra); await dbPut("insp", pa); return openInsp(pa.id);
       }
       const id = norm($("#nt").value), t = TW[id];
-      if (!t || (t.group === "G" && !isLog(form))) return toast(isLog(form) ? "Enter T001 – T240, G-0 or G-RM." : "Enter a tower number T001 – T240.");
+      if (!t) return toast("Enter T001 – T240, or tap Gantry 1 / Gantry 2.");
       const dup = all.find((p) => p.structure === id && p.form === form && p.round === settings.round);
       if (!dup) { const g = await teamGate(id, form, all); if (g === "stop") return; if (g) return openInsp(g.id); }
       if (dup && !confirm(id + " " + Core.formCode(form) + " already exists for round " + settings.round + ". Open it instead?\n\nOK = open the existing one, Cancel = start a second copy")) { /* second copy */ }
