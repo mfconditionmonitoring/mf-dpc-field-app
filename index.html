@@ -225,6 +225,7 @@ input.camno{margin-top:6px;min-height:38px;font-size:14px;padding:6px 9px}
 #sync .dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:none}
 #sync.pulse .dot{animation:blink 1s ease-in-out infinite}
 @keyframes blink{50%{opacity:.35}}
+.apick{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.apick button{flex:1 1 46%;text-align:left;padding:9px 10px;border-radius:10px;border:1px solid #cfd8dc;background:#fff;font-size:14px;font-weight:700;color:#13202a}.apick button small{display:block;font-weight:400;color:#607d8b;font-size:12px}.apick button.done{background:#E3F4EA;border-color:#1E8E3E}.apick button.prog{background:#FFF1DE;border-color:#F08A00}
 .stb{margin-top:8px;padding:9px 11px;border-radius:10px;font-weight:700;font-size:14px;color:#13202a}
 .stb.done{background:#E3F4EA;border-left:5px solid #1E8E3E}
 .stb.prog{background:#FFF1DE;border-left:5px solid #F08A00}
@@ -2163,7 +2164,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.6.9";
+  const APP_VERSION = "1.7.0";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2418,6 +2419,33 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   const nameOfId = (id) => ((((config && config.team) || []).find((x) => x.id === id) || {}).name || (people[id] || {}).name || id || "");
   const hm = (iso) => { if (!iso) return ""; const o = OMT(iso); return o.slice(0, 10) === today() ? o.slice(11, 16) : o.slice(0, 16); };
+  /** Asset search: "c1 jp 3", "JP3", "c2-jp-11" … all find the item; the exact ID is not needed. */
+  const akey = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/LB$/, "");
+  function assetFind(form, v) {
+    const q = akey(v); if (!q) return assetList(form).slice();
+    const out = assetList(form).filter((a) => { const k = akey(a.id), l = akey(a.label), n = akey(a.name); return k.includes(q) || l.includes(q) || n.includes(q); });
+    // "JP1" must not also list JP10/JP11 first: exact number match comes first
+    return out.sort((a, b) => (akey(a.id) === q || akey(a.label) === q ? -1 : 0) - (akey(b.id) === q || akey(b.label) === q ? -1 : 0));
+  }
+  function assetResolve(form, v) {
+    const a = structOf(form, String(v || "").trim().toUpperCase()); if (a) return a;
+    const q = akey(v), ex = assetList(form).filter((x) => akey(x.id) === q || akey(x.label) === q);
+    if (ex.length === 1) return ex[0];
+    const m = assetFind(form, v); return m.length === 1 ? m[0] : null;
+  }
+  function assetPick(form) {
+    const box = $("#apick"); if (!box) return;
+    if (!isAssetForm(form) || assetList(form).length < 2) { box.innerHTML = ""; return; }
+    const v = $("#nt").value, cur = assetResolve(form, v);
+    let list = assetFind(form, cur ? "" : v);
+    if (fix) list = list.map((a) => [a, towerDist(a)]).sort((x, y) => (x[1] == null ? 1e9 : x[1]) - (y[1] == null ? 1e9 : y[1])).map((x) => x[0]);
+    box.innerHTML = list.length ? list.map((a) => { const st = statusFor(a.id, form), d = towerDist(a);
+      const cls = st ? (st.status === "complete" ? "done" : "prog") : "";
+      const sub = [d != null ? (d >= 1000 ? (d / 1000).toFixed(1) + " km" : d + " m") : "", st ? (st.status === "complete" ? "done" : "started") : ""].filter(Boolean).join(" · ");
+      return `<button type="button" class="${cls}${cur && cur.id === a.id ? " ok" : ""}" data-aid="${esc(a.id)}">${esc(a.label || a.id)}${sub ? "<small>" + esc(sub) + "</small>" : ""}</button>`; }).join("")
+      : '<p class="muted">No item matches – try e.g. C1 JP3</p>';
+    box.querySelectorAll("[data-aid]").forEach((b) => (b.onclick = () => { $("#nt").value = b.dataset.aid; $("#nt").oninput(); }));
+  }
   function statusFor(structure, form) { const e = (teamStatus.list || {})[structure + "_" + Core.formCode(form)]; return teamStatus.round === settings.round ? e || null : null; }
   function statusText(st) {
     if (!st) return "";
@@ -2497,7 +2525,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <input id="nt" type="text" inputmode="numeric" list="tl" autocomplete="off">
         <datalist id="tl">${TOWERS.slice().sort((a, b) => (+a.chainage || 0) - (+b.chainage || 0)).map((t) => `<option value="${t.id}">${t.id === "G-0" ? "Gantry 1 – Duqm transition station" : t.id === "G-RM" ? "Gantry 2 – Ras Markaz (after T240)" : t.typeText}</option>`).join("")}</datalist>
         <div class="row" style="margin-top:8px;gap:8px"><button class="btn" id="gq1" type="button">Gantry 1 (Duqm)</button><button class="btn" id="gq2" type="button">Gantry 2 (Ras Markaz)</button></div>
-        <div id="ntinfo" class="muted" style="margin-top:6px"></div>
+        <div id="ntinfo" class="muted" style="margin-top:6px"></div><div id="apick" class="apick"></div>
         <div class="row" style="margin-top:12px"><button class="btn pri grow" id="start">Start inspection</button><button class="btn" id="near">Nearest tower</button><button class="btn" id="navgo">🧭 Directions</button></div>
       </div>
       <div class="card"><h2>On this phone</h2><button class="btn pri" id="sendNow" style="width:100%;margin:4px 0 4px">⬆ Send now</button><div id="awake" class="muted" style="font-size:13px;margin:0 0 8px"></div><input id="find" type="search" placeholder="🔍 Search tower, e.g. 120" autocomplete="off" style="width:100%;margin-bottom:6px"><div class="seg small" id="findSt" style="margin:0 0 8px"><button data-v="">All</button><button data-v="open">In progress</button><button data-v="done">Complete</button><button data-v="wait">Not sent</button></div><div class="list" id="found"></div><div class="list" id="mine"></div><div id="space"></div></div>
@@ -2509,7 +2537,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     $("#nf").onchange = () => {
       const f = $("#nf").value, A = isAssetForm(f); try { renderNfJob(f); } catch (x) {}
       $("#ntl").textContent = A ? "Item inspected" : "Tower / structure";
-      $("#nt").placeholder = A ? "Pick from the list, e.g. " + ((assetList(f)[0] || {}).id || "") : "Tower number, e.g. 4 or T004";
+      $("#nt").placeholder = A ? "Search, e.g. C1 JP3 – or tap below" : "Tower number, e.g. 4 or T004";
       $("#nt").setAttribute("inputmode", A ? "text" : "numeric");
       $("#tl").innerHTML = A ? assetList(f).map((a) => `<option value="${esc(a.id)}">${esc(optLabel(a.id, a.name, f))}</option>`).join("") : towerOptsFor(f);
       if (A && assetList(f).length === 1) $("#nt").value = assetList(f)[0].id; else $("#nt").value = "";
@@ -2518,11 +2546,12 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     $("#nt").oninput = () => {
       const f = $("#nf").value;
       const stLine = (id) => { const st = statusFor(id, f); if (!st) return teamStatus.round === settings.round ? '<div class="stb free">Not started by anyone yet</div>' : ""; return '<div class="stb ' + (st.status === "complete" ? "done" : "prog") + '">' + esc(statusText(st)) + "</div>"; };
-      if (isAssetForm(f)) { const aid = $("#nt").value.trim().toUpperCase(), a = structOf(f, aid); $("#ntinfo").innerHTML = a ? esc(a.typeText + (towerDist(a) != null ? " · " + towerDist(a) + " m away" : "")) + stLine(aid) : ""; return; }
+      if (isAssetForm(f)) { const a = assetResolve(f, $("#nt").value), aid = a ? a.id : ""; $("#ntinfo").innerHTML = a ? esc(a.id + " – " + a.typeText + (towerDist(a) != null ? " · " + towerDist(a) + " m away" : "")) + stLine(aid) : ""; assetPick(f); return; }
+      { const bx = $("#apick"); if (bx) bx.innerHTML = ""; }
       const tid = norm($("#nt").value), t = TW[tid]; $("#ntinfo").innerHTML = t ? esc(`${t.typeText} · ext ${t.ext} · chainage ${t.chainage} m${towerDist(t) != null ? " · " + towerDist(t) + " m away" : ""}`) + stLine(tid) : ""; };
     $("#navgo").onclick = () => {
       const f = $("#nf").value, v = $("#nt").value.trim();
-      const t = isAssetForm(f) ? structOf(f, v.toUpperCase()) : TW[norm(v)];
+      const t = isAssetForm(f) ? assetResolve(f, v) : TW[norm(v)];
       if (!t) return toast("Type a tower number (e.g. 145) or tap Nearest tower first.");
       openDirections(t);
     };
@@ -2544,7 +2573,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       const all = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
       const form = $("#nf").value;
       if (isAssetForm(form)) {
-        const aid = $("#nt").value.trim().toUpperCase(); if (!structOf(form, aid)) return toast("Pick an item from the list.");
+        const _a = assetResolve(form, $("#nt").value); if (!_a) return toast("Pick an item from the list below the box."); const aid = _a.id;
         const dupA = all.find((p) => p.structure === aid && p.form === form && p.round === settings.round);
         if (!dupA) { const g = await teamGate(aid, form, all); if (g === "stop") return; if (g) return openInsp(g.id); }
         if (dupA && confirm(aid + " " + Core.formCode(form) + " already exists for round " + settings.round + ". Open it instead?\n\nOK = open the existing one, Cancel = start a second copy")) return openInsp(dupA.id);
