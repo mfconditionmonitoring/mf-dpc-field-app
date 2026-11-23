@@ -234,6 +234,8 @@ input.camno{margin-top:6px;min-height:38px;font-size:14px;padding:6px 9px}
 .qan{display:inline-block;min-width:26px;height:26px;border-radius:13px;background:#c62828;color:#fff;text-align:center;line-height:26px}
 .qaw{font-weight:600}.qat{margin-top:4px}.qae{margin-top:4px;color:#2e7d32}
 .qaflag{outline:3px solid #c62828;outline-offset:2px;border-radius:8px}
+.qalock{opacity:.45;pointer-events:none}
+.qalockall input,.qalockall select,.qalockall textarea,.qalockall .chk,.qalockall .seg{pointer-events:none;opacity:.55}
 .techui .btn{font-size:16px}.techui label.f{font-size:16px}
 </style></head>
 <body>
@@ -2169,7 +2171,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.8.0";
+  const APP_VERSION = "1.8.1";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2711,7 +2713,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     else if (curTab === "sum") paneSummary(pane, def);
     else if (curTab === "hist") paneHistory(pane);
     else if (curTab === "gen") paneGenerate(pane, def, tw);
-    lockPane(pane); markFlags();
+    lockPane(pane); markFlags(); qaLock(pane);
     const on = $("#tabs .on"); if (on) on.scrollIntoView({ inline: "center", block: "nearest" });
   }
 
@@ -3257,7 +3259,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     else if (curTab === "hist") paneHistory(pane);
     else if (curTab === "gen") paneGenerate(pane, def, tw);
     else if (/^s/.test(curTab)) genSection(pane, def, curTab.slice(1));
-    lockPane(pane); markFlags();
+    lockPane(pane); markFlags(); qaLock(pane);
     const on = $("#tabs .on"); if (on) on.scrollIntoView({ inline: "center", block: "nearest" });
   }
   function genHeader(pane, def, tw) {
@@ -3794,6 +3796,18 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   function markFlags() {
     if (!cur) return;
     qaPointsOf(cur).forEach((x) => { const el = document.querySelector(`[data-it="${x.point}"],[data-leg="${x.point}"],[data-ph="${x.point}"]`); if (el) el.classList.add("qaflag"); });
+  }
+  /** v1.8.1: a record returned by the QA check opens only its returned points; the rest stays locked (team leader / E&I Engineer excepted). */
+  function qaLock(pane) {
+    if (!cur || !pane || isLead() || cur.status === "complete" || cur.heldBy || isLog(cur.form) || isGen(cur.form)) return;
+    const pts = qaPointsOf(cur); if (!pts.length || pts.some((x) => x.rule === "V-02")) return;
+    const allow = new Set(); pts.forEach((x) => { allow.add(x.point); (String(x.msg).match(/\b\d+\.\d+\b/g) || []).forEach((m) => allow.add(m)); });
+    const hdrOpen = pts.some((x) => x.rule === "H-01" || /Header/i.test(x.point));
+    let n = 0;
+    pane.querySelectorAll("[data-it],[data-leg],[data-ph]").forEach((el) => { const id = el.dataset.it || el.dataset.leg || el.dataset.ph; if (!allow.has(id)) { el.classList.add("qalock"); n++; } });
+    if (curTab === "hdr" && !hdrOpen) { pane.classList.add("qalockall"); n++; }
+    const b = pane.querySelector("#allok"); if (b) b.style.display = "none";
+    if (n) pane.insertAdjacentHTML("afterbegin", '<div class="card" style="border-left:4px solid #c62828;margin:0 0 8px"><b>🔒 Only the points in the QA card can be changed.</b> The other points stay as they were sent.</div>');
   }
   document.addEventListener("click", (ev) => {
     const g = ev.target.closest && ev.target.closest("[data-goto]"); if (g) { ev.preventDefault(); gotoPoint(g.dataset.goto); return; }
