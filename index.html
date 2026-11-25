@@ -230,7 +230,7 @@ input.camno{margin-top:6px;min-height:38px;font-size:14px;padding:6px 9px}
 .stb.done{background:#E3F4EA;border-left:5px solid #1E8E3E}
 .stb.prog{background:#FFF1DE;border-left:5px solid #F08A00}
 .stb.free{background:#EEF2F5;border-left:5px solid #8A9BA6;font-weight:600;color:#4b5b66}
-.lft{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.lft .chip{border:1px solid #9fb6c0;background:#fff;color:#0E3A4A;border-radius:12px;padding:3px 8px;font-size:12px;font-weight:700;min-height:0}.lft .chip.pg{background:#FFF1DE;border-color:#F08A00}
+.lft{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.lft .chip{border:1px solid #9fb6c0;background:#fff;color:#0E3A4A;border-radius:12px;padding:3px 8px;font-size:12px;font-weight:700;min-height:0}.lft .chip.pg{background:#FFF1DE;border-color:#F08A00}.lft .chip.dn{background:#E3F4EA;border-color:#9fd3b0;color:#1E6B3A;font-weight:600}
 .qacard{border:1px solid #e0b4b4;border-radius:10px;padding:10px;margin:8px 0;background:#fff}
 .qan{display:inline-block;min-width:26px;height:26px;border-radius:13px;background:#c62828;color:#fff;text-align:center;line-height:26px}
 .qaw{font-weight:600}.qat{margin-top:4px}.qae{margin-top:4px;color:#2e7d32}
@@ -2172,7 +2172,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.9.1";
+  const APP_VERSION = "1.9.2";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -4152,12 +4152,21 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const actFor = (f) => { const J = jobOf(); return J ? J.acts.find((x) => x.code === jobCode(Core.formCode(f || ""))) || J.acts.find((x) => x.code === jobCode(f || "")) : null; };
   const hasList = (a) => !!(a && Array.isArray(a.todo));
   const firstName = (id) => { const t = ((config && config.team) || []).find((x) => x.id === id); return t ? t.name.split(" ")[0] : id || ""; };
-  function leftChips(a, max) {
-    if (!hasList(a) || (!a.todo.length && !(a.prog || []).length)) return "";
-    max = max || 40; const all = a.todo.map((id) => [id, ""]).concat((a.prog || []).map((x) => [x[0], x]));
-    const shown = all.slice(0, max), more = all.length - shown.length;
-    return `<div class="lft">${shown.map(([id, p]) => `<button class="chip${p ? " pg" : ""}" data-left="${esc(id)}" data-lf="${esc(a.code)}" title="${p ? (p[2] >= 100 ? "All filled – not yet marked Complete" : "Started, not finished") + (p[1] ? " – " + esc(firstName(p[1])) : "") : "Not started"}">${esc(id)}${p ? (p[2] >= 100 ? " ☐ Complete?" : " ◐ " + p[2] + "%") + (p[1] ? " " + esc(firstName(p[1])) : "") : ""}</button>`).join("")}${more > 0 ? `<span class="muted"> +${more} more</span>` : ""}</div>`;
+  const leftIds = (a) => (hasList(a) ? a.todo.concat((a.prog || []).map((x) => x[0])) : []);
+  function unitsOf(a) { const f = Object.keys(FORM_TITLE).find((k) => jobCode(Core.formCode(k)) === a.code || jobCode(k) === a.code) || "";
+    if (isAssetForm(f)) return ((config.assets || {})[f] || []).map((x) => x.id);
+    return TOWERS.map((t) => t.id); }
+  let leftShow = "";   // "", "left" or "done"
+  function leftPanel(a) {
+    if (!hasList(a)) return "";
+    const L = leftIds(a), Ls = new Set(L), D = unitsOf(a).filter((id) => !Ls.has(id)), P = new Map((a.prog || []).map((x) => [x[0], x]));
+    const btn = (k, t) => `<button class="btn sm${leftShow === k ? " pri" : ""}" data-lshow="${k}">${t}</button>`;
+    let list = "";
+    if (leftShow === "left") list = L.length ? `<div class="lft">${L.map((id) => { const p = P.get(id); return `<button class="chip${p ? " pg" : ""}" data-left="${esc(id)}" data-lf="${esc(a.code)}">${esc(id)}${p ? " · started" + (p[1] ? " by " + esc(firstName(p[1])) : "") : ""}</button>`; }).join("")}</div><div class="muted" style="font-size:12px">Tap a tower to select it, then press Start inspection.</div>` : `<p>Nothing left ✅</p>`;
+    if (leftShow === "done") list = `<div class="lft">${D.map((id) => `<span class="chip dn">${esc(id)}</span>`).join("")}</div>`;
+    return `<div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">${btn("left", "Left (" + L.length + ")")}${btn("done", "Completed (" + D.length + ")")}</div>${list}`;
   }
+  document.addEventListener("click", (ev) => { const b = ev.target.closest && ev.target.closest("[data-lshow]"); if (!b) return; ev.preventDefault(); leftShow = leftShow === b.dataset.lshow ? "" : b.dataset.lshow; try { renderNfJob($("#nf").value); } catch (x) {} });
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-left]"); if (!b) return; ev.preventDefault();
     const code = b.dataset.lf, nf = $("#nf"), nt = $("#nt"); if (!nf || !nt) return;
@@ -4170,7 +4179,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /** true = go on; false = stop. Asks only when the office record already holds this tower as complete. */
   function officeDoneCheck(form, id) {
     const a = actFor(form); if (!hasList(a)) return true;
-    if (a.todo.includes(id) || (a.prog || []).some((x) => x[0] === id)) return true;
+    if (leftIds(a).includes(id)) return true;
     return confirm(id + " – " + a.title + " is already COMPLETE on the office record (whole team).\n\nStart it again only if the team leader asked you to.\n\nOK = start anyway, Cancel = stop");
   }
 
@@ -4406,7 +4415,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <span class="days ${late ? "late" : ""}">⏳ ${left} day${left === 1 ? "" : "s"} left</span><div class="reg">Registers ${J.reg}%</div></div></div>
       <div class="acts">${J.acts.map((a) => `<div class="a ${a.code === sel ? "me" : ""}"><div class="h"><b>${esc(a.code)}</b> ${esc(a.title)} <span class="w">${a.w}%</span><span class="pc" style="color:${col(a.field)}">${a.field}%</span></div>
         <div class="bb"><i style="width:${Math.min(100, a.field)}%;background:${col(a.field)}"></i></div>
-        <div class="ft"><span>${a.left ? a.left + " " + esc(a.unit) + " left" : "✅ Done"}</span><span>${a.left && left ? "<b>" + Math.ceil(a.left / left) + "</b> per day" : ""}</span></div>${leftChips(a, 30)}</div>`).join("")}</div>`;
+        <div class="ft"><span>${(hasList(a) ? leftIds(a).length : a.left) ? (hasList(a) ? leftIds(a).length : a.left) + " " + esc(a.unit) + " left" : "✅ Done"}</span><span>${(hasList(a) ? leftIds(a).length : a.left) && left ? "<b>" + Math.ceil((hasList(a) ? leftIds(a).length : a.left) / left) + "</b> per day" : ""}</span></div></div>`).join("")}</div>`;
   }
   function renderNfJob(f) {
     const el = $("#nfjob"), J = jobOf(); if (!el) return;
@@ -4414,14 +4423,15 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     if (!a) { el.style.display = "none"; return; }
     const left = jobDays(J);
     el.style.display = "";
-    el.innerHTML = `<b>${esc(a.code)} ${esc(a.title)}</b> · weight <b>${a.w}%</b> of the job · completed <b>${a.field}%</b><br>${a.left ? `${a.left} ${esc(a.unit)} left · <b>${left ? Math.ceil(a.left / left) : a.left} per day</b> needed to finish by ${esc(jobDate(J.deadline))}` : "All done for this activity ✅"}${hasList(a) && (a.todo.length || (a.prog || []).length) ? "<br><b>Left – tap one to start:</b>" + leftChips(a, 80) : ""}`;
+    const nL = hasList(a) ? leftIds(a).length : a.left;
+    el.innerHTML = `<b>${esc(a.code)} ${esc(a.title)}</b> · weight <b>${a.w}%</b> of the job · completed <b>${a.field}%</b><br>${nL ? `${nL} ${esc(a.unit)} left · <b>${left ? Math.ceil(nL / left) : nL} per day</b> needed to finish by ${esc(jobDate(J.deadline))}` : "All done for this activity ✅"}${leftPanel(a)}`;
     renderJob();
   }
   function renderNext(all) {
     const el = $("#nextCard"); if (!el) return;
     const s = roundStats(all), aJ = actFor(settings.option), off = hasList(aJ);
-    const open = off ? TOWERS.filter((t) => t.group !== "G" && (aJ.todo.includes(t.id) || (aJ.prog || []).some((x) => x[0] === t.id && (!x[1] || x[1] === me.id)))) : TOWERS.filter((t) => t.group !== "G" && !s.started.has(t.id));
-    if (!open.length) { el.innerHTML = off ? `<h2>Every tower is done on the office record ✅</h2>` : `<h2>Every tower has been started</h2>`; return; }
+    const open = off ? TOWERS.filter((t) => t.group !== "G" && leftIds(aJ).includes(t.id)) : TOWERS.filter((t) => t.group !== "G" && !s.started.has(t.id));
+    if (!open.length) { const L = off ? leftIds(aJ) : []; el.innerHTML = off ? (L.length ? `<h2>Left: ${L.map(esc).join(", ")}</h2>` : `<h2>Every tower is done on the office record ✅</h2>`) : `<h2>Every tower has been started</h2>`; return; }
     let pick = null;
     if (fix) open.forEach((t) => { const d = towerDist(t); if (d != null && (!pick || d < pick.d)) pick = { t, d }; });
     if (!pick) pick = { t: open[0], d: null };
