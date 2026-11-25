@@ -2172,7 +2172,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.9.2";
+  const APP_VERSION = "1.9.3";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -4152,19 +4152,22 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const actFor = (f) => { const J = jobOf(); return J ? J.acts.find((x) => x.code === jobCode(Core.formCode(f || ""))) || J.acts.find((x) => x.code === jobCode(f || "")) : null; };
   const hasList = (a) => !!(a && Array.isArray(a.todo));
   const firstName = (id) => { const t = ((config && config.team) || []).find((x) => x.id === id); return t ? t.name.split(" ")[0] : id || ""; };
-  const leftIds = (a) => (hasList(a) ? a.todo.concat((a.prog || []).map((x) => x[0])) : []);
+  /* not started = todo; unfinished = some data but not all (prog, below 100 %); completed = everything else */
+  const unfin = (a) => (a.prog || []).filter((x) => x[2] < 100);
+  const leftIds = (a) => (hasList(a) ? a.todo.concat(unfin(a).map((x) => x[0])) : []);
   function unitsOf(a) { const f = Object.keys(FORM_TITLE).find((k) => jobCode(Core.formCode(k)) === a.code || jobCode(k) === a.code) || "";
     if (isAssetForm(f)) return ((config.assets || {})[f] || []).map((x) => x.id);
     return TOWERS.map((t) => t.id); }
-  let leftShow = "";   // "", "left" or "done"
+  let leftShow = "";   // "", "new", "unf" or "done"
   function leftPanel(a) {
     if (!hasList(a)) return "";
-    const L = leftIds(a), Ls = new Set(L), D = unitsOf(a).filter((id) => !Ls.has(id)), P = new Map((a.prog || []).map((x) => [x[0], x]));
-    const btn = (k, t) => `<button class="btn sm${leftShow === k ? " pri" : ""}" data-lshow="${k}">${t}</button>`;
+    const U = unfin(a), Ls = new Set(leftIds(a)), D = unitsOf(a).filter((id) => !Ls.has(id));
+    const btn = (k, t, n) => `<button class="btn sm${leftShow === k ? " pri" : ""}" data-lshow="${k}"${n ? "" : " disabled"}>${t} (${n})</button>`;
     let list = "";
-    if (leftShow === "left") list = L.length ? `<div class="lft">${L.map((id) => { const p = P.get(id); return `<button class="chip${p ? " pg" : ""}" data-left="${esc(id)}" data-lf="${esc(a.code)}">${esc(id)}${p ? " · started" + (p[1] ? " by " + esc(firstName(p[1])) : "") : ""}</button>`; }).join("")}</div><div class="muted" style="font-size:12px">Tap a tower to select it, then press Start inspection.</div>` : `<p>Nothing left ✅</p>`;
+    if (leftShow === "new") list = `<div class="lft">${a.todo.map((id) => `<button class="chip" data-left="${esc(id)}" data-lf="${esc(a.code)}">${esc(id)}</button>`).join("")}</div>`;
+    if (leftShow === "unf") list = `<div class="lft">${U.map((x) => `<button class="chip pg" data-left="${esc(x[0])}" data-lf="${esc(a.code)}">${esc(x[0])} · ${x[2]}%</button>`).join("")}</div><div class="muted" style="font-size:12px">Started but some points are still empty. Tap a tower, then Start inspection to open it.</div>`;
     if (leftShow === "done") list = `<div class="lft">${D.map((id) => `<span class="chip dn">${esc(id)}</span>`).join("")}</div>`;
-    return `<div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">${btn("left", "Left (" + L.length + ")")}${btn("done", "Completed (" + D.length + ")")}</div>${list}`;
+    return `<div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">${btn("new", "Not started", a.todo.length)}${btn("unf", "Unfinished", U.length)}${btn("done", "Completed", D.length)}</div>${list}`;
   }
   document.addEventListener("click", (ev) => { const b = ev.target.closest && ev.target.closest("[data-lshow]"); if (!b) return; ev.preventDefault(); leftShow = leftShow === b.dataset.lshow ? "" : b.dataset.lshow; try { renderNfJob($("#nf").value); } catch (x) {} });
   document.addEventListener("click", (ev) => {
@@ -4415,7 +4418,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         <span class="days ${late ? "late" : ""}">⏳ ${left} day${left === 1 ? "" : "s"} left</span><div class="reg">Registers ${J.reg}%</div></div></div>
       <div class="acts">${J.acts.map((a) => `<div class="a ${a.code === sel ? "me" : ""}"><div class="h"><b>${esc(a.code)}</b> ${esc(a.title)} <span class="w">${a.w}%</span><span class="pc" style="color:${col(a.field)}">${a.field}%</span></div>
         <div class="bb"><i style="width:${Math.min(100, a.field)}%;background:${col(a.field)}"></i></div>
-        <div class="ft"><span>${(hasList(a) ? leftIds(a).length : a.left) ? (hasList(a) ? leftIds(a).length : a.left) + " " + esc(a.unit) + " left" : "✅ Done"}</span><span>${(hasList(a) ? leftIds(a).length : a.left) && left ? "<b>" + Math.ceil((hasList(a) ? leftIds(a).length : a.left) / left) + "</b> per day" : ""}</span></div></div>`).join("")}</div>`;
+        <div class="ft"><span>${hasList(a) ? (leftIds(a).length ? [a.todo.length ? a.todo.length + " not started" : "", unfin(a).length ? unfin(a).length + " unfinished" : ""].filter(Boolean).join(" · ") : "✅ Done") : a.left ? a.left + " " + esc(a.unit) + " left" : "✅ Done"}</span><span>${!hasList(a) && a.left && left ? "<b>" + Math.ceil(a.left / left) + "</b> per day" : ""}</span></div></div>`).join("")}</div>`;
   }
   function renderNfJob(f) {
     const el = $("#nfjob"), J = jobOf(); if (!el) return;
@@ -4424,6 +4427,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const left = jobDays(J);
     el.style.display = "";
     const nL = hasList(a) ? leftIds(a).length : a.left;
+    if (hasList(a)) { el.innerHTML = `<b>${esc(a.code)} ${esc(a.title)}</b> · completed <b>${a.field}%</b>${nL ? "" : " ✅"}${leftPanel(a)}`; renderJob(); return; }
     el.innerHTML = `<b>${esc(a.code)} ${esc(a.title)}</b> · weight <b>${a.w}%</b> of the job · completed <b>${a.field}%</b><br>${nL ? `${nL} ${esc(a.unit)} left · <b>${left ? Math.ceil(nL / left) : nL} per day</b> needed to finish by ${esc(jobDate(J.deadline))}` : "All done for this activity ✅"}${leftPanel(a)}`;
     renderJob();
   }
@@ -4431,6 +4435,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     const el = $("#nextCard"); if (!el) return;
     const s = roundStats(all), aJ = actFor(settings.option), off = hasList(aJ);
     const open = off ? TOWERS.filter((t) => t.group !== "G" && leftIds(aJ).includes(t.id)) : TOWERS.filter((t) => t.group !== "G" && !s.started.has(t.id));
+    if (off) setTimeout(() => { const l = el.querySelector(".lbl"); if (l) l.textContent = fix ? "Nearest tower still to do" : "Next tower still to do"; }, 0);
     if (!open.length) { const L = off ? leftIds(aJ) : []; el.innerHTML = off ? (L.length ? `<h2>Left: ${L.map(esc).join(", ")}</h2>` : `<h2>Every tower is done on the office record ✅</h2>`) : `<h2>Every tower has been started</h2>`; return; }
     let pick = null;
     if (fix) open.forEach((t) => { const d = towerDist(t); if (d != null && (!pick || d < pick.d)) pick = { t, d }; });
