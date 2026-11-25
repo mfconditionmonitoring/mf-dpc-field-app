@@ -2171,7 +2171,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.8.1";
+  const APP_VERSION = "1.9.0";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -2517,7 +2517,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
 
   async function home() {
     if (!me || locked) return lock();
-    if (me.role === "tech") return techHome();
+    if (me.role === "tech") document.body.classList.add("techmode");
     view = "home"; cur = null; updateWho(); document.body.classList.remove("landing"); setGear(); clearInterval(nextTimer); dbDel("kv", "resume").catch(() => {});
     const all = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
     $("#title").textContent = "Round " + settings.round;
@@ -2580,6 +2580,8 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       try {
       const all = (await dbAll("insp")).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
       const form = $("#nf").value;
+      if (roundLocked()) return toast("Round " + settings.round + " is closed – the master copy is final.");
+      if (isTech()) { const A2 = isAssetForm(form), tid = A2 ? ((assetResolve(form, $("#nt").value) || {}).id) : norm($("#nt").value); if (!tid || (!A2 && !TW[tid])) return toast("Choose the tower or item first."); return techStart(form, tid); }
       if (isAssetForm(form)) {
         const _a = assetResolve(form, $("#nt").value); if (!_a) return toast("Pick an item from the list below the box."); const aid = _a.id;
         const dupA = all.find((p) => p.structure === aid && p.form === form && p.round === settings.round);
@@ -2635,6 +2637,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     view = "insp"; curTab = isLog(cur.form) ? "r" : "hdr";
     $("#back").classList.remove("hide");
     isLog(cur.form) ? renderLog() : isGen(cur.form) ? renderGen() : renderInsp();
+    propPanel();
   }
 
   let saveTimer, lastFlat = null, auditTag = "";
@@ -2648,6 +2651,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /** Run fn with every change it makes tagged (e.g. "bulk" for Mark remaining as satisfactory). */
   function tagged(tag, fn) { auditTag = tag; try { fn(); } finally { auditTag = ""; } }
   function save(force) {
+    if (cur && roundLocked(cur)) return toast("Round closed – the master copy is read-only");
     if (cur && cur.status === "complete" && force !== true) return toast("Completed – press ✏️ Correct this checklist first");
     if (cur && cur.heldBy && force !== true) return toast("Continued by another team member – this copy is read-only");
     cur.updated = new Date().toISOString(); cur.rev = (cur.rev || 0) + 1; queueSync();
@@ -2713,7 +2717,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     else if (curTab === "sum") paneSummary(pane, def);
     else if (curTab === "hist") paneHistory(pane);
     else if (curTab === "gen") paneGenerate(pane, def, tw);
-    lockPane(pane); markFlags(); qaLock(pane);
+    lockPane(pane); markFlags(); qaLock(pane); propPanel();
     const on = $("#tabs .on"); if (on) on.scrollIntoView({ inline: "center", block: "nearest" });
   }
 
@@ -2980,6 +2984,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     return { thumb, w: bmp.width, h: bmp.height };
   }
   async function capture(slot, caption, src) {
+    if (roundLocked(cur)) { toast("Round closed – the master copy is read-only"); return false; }
     if (cur.status === "complete") { toast("Completed – press ✏️ Correct this checklist first"); return false; }
     if (cur.heldBy) { toast("Continued by another team member – this copy is read-only"); return false; }
     const file = await (src === "gallery" ? pickImage(false) : inAppCamera()); if (!file) return false;
@@ -3030,6 +3035,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   /** Completed records are read-only; a team leader, the E&I Engineer, or anyone on a returned record can reopen with a reason. */
   function lockPane(pane) {
+    if (cur && roundLocked(cur)) { pane.classList.add("locked"); pane.insertAdjacentHTML("beforebegin", '<div style="padding:12px 12px 0"><div class="card" style="border-left:4px solid #0E5A73"><b>Round ' + esc(cur.round) + ' is closed.</b> This is the master copy from the E&amp;I Engineer – read-only.</div></div>'); return; }
     if (cur && cur.reviewOf && !cur.heldBy && isLead() && cur.reviewOf !== me.id) {
       pane.insertAdjacentHTML("beforebegin", `<div style="padding:12px 12px 0"><div class="card rvb"><div class="row"><div class="grow"><b>Reviewing ${esc(nameOfId(cur.reviewOf))}'s inspection</b></div><button class="btn sm acc" id="hb">Return to ${esc(nameOfId(cur.reviewOf).split(" ")[0])}</button></div></div></div>`);
       const hb = $("#hb"); if (hb) hb.onclick = handBack;
@@ -3259,7 +3265,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     else if (curTab === "hist") paneHistory(pane);
     else if (curTab === "gen") paneGenerate(pane, def, tw);
     else if (/^s/.test(curTab)) genSection(pane, def, curTab.slice(1));
-    lockPane(pane); markFlags(); qaLock(pane);
+    lockPane(pane); markFlags(); qaLock(pane); propPanel();
     const on = $("#tabs .on"); if (on) on.scrollIntoView({ inline: "center", block: "nearest" });
   }
   function genHeader(pane, def, tw) {
@@ -3594,7 +3600,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   let syncing = false, syncTimer = null, lastSync = null, lastErr = "";
   function markDirty() { if (!cur) return; if (cur.status === "complete" || cur.heldBy) return; audit(); cur.rev = (cur.rev || 0) + 1; cur.updated = new Date().toISOString(); clearTimeout(saveTimer); { const c = cur; saveTimer = setTimeout(() => c && dbPut("insp", c), 250); }; queueSync(); }
   function queueSync() { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(false), 4000); }
-  const folderOf = (p) => p.structure + "_" + Core.formCode(p.form);
+  const folderOf = (p) => p.structure + "_" + Core.formCode(p.form) + (p.proposal ? "-P-" + (p.createdBy || "") : "");
   async function pendingCount(p) {
     if (p.heldBy) return 0;
     let n = (p.sentRev || 0) < (p.rev || 0) ? 1 : 0;
@@ -3776,7 +3782,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       <div class="qaw">${esc(x.msg)}</div>
       ${x.todo ? `<div class="qat"><b>What to do:</b> ${esc(x.todo)}</div>` : ""}
       ${x.ex ? `<div class="qae"><b>Correct example:</b> ${esc(x.ex)}</div>` : ""}
-      <div class="row" style="gap:6px;margin-top:6px">${x.obs ? `<button class="btn sm pri" data-obs="${esc(x.obs)}">Open the observation</button>` : x.point && x.point !== "Header" ? `<button class="btn sm" data-goto="${esc(x.point)}">Go to ${esc(x.point)}</button>` : ""}${x.round > 1 ? `<span class="pill s3">${nth(x.round)}</span>` : ""}${x.level === "lead" ? '<span class="pill s1">Team leader informed</span>' : x.level === "engineer" ? '<span class="pill s3">With the E&amp;I Engineer</span>' : ""}</div>
+      <div class="row" style="gap:6px;margin-top:6px">${x.prop ? (isLead() ? `<button class="btn sm pri" data-prop="${esc(x.prop)}">Review the proposal</button>` : '<span class="muted">Waiting for the team leader</span>') : x.obs ? `<button class="btn sm pri" data-obs="${esc(x.obs)}">Open the observation</button>` : x.point && x.point !== "Header" ? `<button class="btn sm" data-goto="${esc(x.point)}">Go to ${esc(x.point)}</button>` : ""}${x.round > 1 ? `<span class="pill s3">${nth(x.round)}</span>` : ""}${x.level === "lead" ? '<span class="pill s1">Team leader informed</span>' : x.level === "engineer" ? '<span class="pill s3">With the E&amp;I Engineer</span>' : ""}</div>
     </div></div></div>`).join("");
   }
   function gotoPoint(pt) {
@@ -3800,7 +3806,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /** v1.8.1: a record returned by the QA check opens only its returned points; the rest stays locked (team leader / E&I Engineer excepted). */
   function qaLock(pane) {
     if (!cur || !pane || isLead() || cur.status === "complete" || cur.heldBy || isLog(cur.form) || isGen(cur.form)) return;
-    const pts = qaPointsOf(cur); if (!pts.length || pts.some((x) => x.rule === "V-02")) return;
+    const pts = qaPointsOf(cur).filter((x) => x.rule !== "F-02" && x.rule !== "F-01"); if (!pts.length || pts.some((x) => x.rule === "V-02")) return;
     const allow = new Set(); pts.forEach((x) => { allow.add(x.point); (String(x.msg).match(/\b\d+\.\d+\b/g) || []).forEach((m) => allow.add(m)); });
     const hdrOpen = pts.some((x) => x.rule === "H-01" || /Header/i.test(x.point));
     let n = 0;
@@ -3836,14 +3842,15 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     </div>`;
   }
   async function obsReviewCard() {
-    if (!me || isTech()) return "";
+    if (!me || isTech() || !isLead()) return "";
     const dec = await kvGet("obrDec", {}), list = ((config && config.obs) || []).filter((o) => !dec[o.uid]);
     if (!list.length) return "";
     return `<div class="card" style="border:2px solid #0E5A73"><h2>Field Technician observations to review (${list.length})</h2><div class="list">${list.map((o) => `<div class="it" data-obs="${esc(o.uid)}"><div class="t">${esc(o.tower)}</div><div class="grow"><b>${esc(o.area || "")}${o.phase ? " · " + esc(o.phase) : ""}</b><div class="muted">${esc(o.en || "Urdu only – open to read and listen")} · ${esc(o.byName || o.by)}</div></div></div>`).join("")}</div></div>`;
   }
   async function bindHomeQA(all) {
     const box = document.getElementById("qaHome"); if (!box) return;
-    box.innerHTML = (await toCorrectCard(all)) + (await obsReviewCard());
+    box.innerHTML = (isTech() ? techCard(all) : (await toCorrectCard(all))) + (await propReviewCard()) + (await obsReviewCard());
+    const to = document.getElementById("techObs"); if (to) to.onclick = () => techObsForm();
     box.querySelectorAll("[data-ck]").forEach((el) => (el.onclick = async () => {
       const k = el.dataset.ck, a2 = await dbAll("insp"), p = a2.find((x) => x.structure + "_" + Core.formCode(x.form) === k);
       if (k.endsWith("_OBS")) { const o = ((config && config.obs) || []).find((x) => x.tower === k.split("_")[0]); return o ? obsView(o.uid) : toast("Open the observation from the list below."); }
@@ -3856,6 +3863,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   async function obsView(uid) {
     const o = ((config && config.obs) || []).find((x) => x.uid === uid);
     if (!o) return toast("This observation is already reviewed.");
+    if (!isLead()) return toast("The team leader reviews the Field Technician's observations first.");
     view = "obs"; $("#back").classList.remove("hide"); $("#back").onclick = () => home();
     $("#title").textContent = "Observation · " + o.tower;
     app().innerHTML = `<div class="card"><h2>${esc(o.tower)} – ${esc(o.area)}${o.phase ? " · " + esc(o.phase) : ""}</h2>
@@ -3886,12 +3894,12 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /* ---------- sending observations and decisions (called from syncNow) ---------- */
   async function extrasPending() {
     let n = 0;
-    for (const store of ["obsRecs", "obrRecs"]) { const recs = await kvGet(store, {}); for (const r of Object.values(recs)) { if ((r.sentRev || 0) < (r.rev || 0)) n++; for (const k of Object.keys(r.photos || {})) { const x = await dbGet("photos", r.id + "/" + k); if (x && !x.uploaded) n++; } } }
+    for (const store of ["obsRecs", "obrRecs", "prdRecs"]) { const recs = await kvGet(store, {}); for (const r of Object.values(recs)) { if ((r.sentRev || 0) < (r.rev || 0)) n++; for (const k of Object.keys(r.photos || {})) { const x = await dbGet("photos", r.id + "/" + k); if (x && !x.uploaded) n++; } } }
     return n;
   }
   async function sendExtras(sendPhoto) {
     let sent = 0;
-    for (const store of ["obsRecs", "obrRecs"]) {
+    for (const store of ["obsRecs", "obrRecs", "prdRecs"]) {
       const recs = await kvGet(store, {});
       for (const f of Object.keys(recs)) {
         const r = recs[f], who = people[r.createdBy] && people[r.createdBy].secret ? people[r.createdBy] : null; if (!who) continue;
@@ -3906,55 +3914,55 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         sent++;
       }
     }
-    if (sent && view === "tech" && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) setTimeout(() => { if (view === "tech") techHome(); }, 300);
+    if (sent && view === "tech" && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) setTimeout(() => { if (view === "tech") techObsForm(); }, 300);
     return sent;
   }
 
   /* ---------- Field Technician screen (Urdu) ---------- */
   let techDraft = null, techRec = null, techSpeech = null;
-  async function techHome() {
-    view = "tech"; cur = null; updateWho(); document.body.classList.remove("landing"); setGear(); $("#back").classList.add("hide");
-    $("#title").textContent = "میرے مشاہدات";
+  async function techObsForm() {
+    view = "tech"; cur = null; updateWho(); document.body.classList.remove("landing"); setGear(); $("#back").classList.remove("hide"); $("#back").onclick = () => home();
+    $("#title").textContent = "General observation";
     techDraft = techDraft || { tower: "", area: "", phase: "", ur: "", audio: "", photos: [] };
     const recs = await kvGet("obsRecs", {}), st = (config && config.obsStatus) || {}, mine = [];
     Object.values(recs).filter((r) => r.createdBy === me.id).forEach((r) => (r.obs || []).forEach((o) => mine.push({ o, r })));
     mine.sort((a, b) => (b.o.time || "").localeCompare(a.o.time || ""));
-    const stTxt = ({ o, r }) => { if ((r.sentRev || 0) < (r.rev || 0)) return '<span class="pill s1">ابھی نہیں بھیجا گیا</span>'; const s = st[o.uid]; if (!s) return '<span class="pill">بھیج دیا گیا</span>'; if (s.st === "accepted") return '<span class="pill ok">قبول ہو گیا' + (s.point ? " – " + esc(s.point) : "") + "</span>"; if (s.st === "rejected") return '<span class="pill s3">رد ہو گیا</span> <span class="muted">' + esc(s.reason) + "</span>"; return '<span class="pill s1">انسپکٹر کے جائزے کا انتظار</span>'; };
+    const stTxt = ({ o, r }) => { if ((r.sentRev || 0) < (r.rev || 0)) return '<span class="pill s1">Not sent yet</span>'; const s = st[o.uid]; if (!s) return '<span class="pill">Sent</span>'; if (s.st === "accepted") return '<span class="pill ok">Accepted' + (s.point ? " – " + esc(s.point) : "") + "</span>"; if (s.st === "rejected") return '<span class="pill s3">Rejected</span> <span class="muted">' + esc(s.reason) + "</span>"; return '<span class="pill s1">Waiting for the team leader</span>'; };
     const cnt = { all: mine.length, ok: mine.filter((x) => (st[x.o.uid] || {}).st === "accepted").length, wait: mine.filter((x) => !st[x.o.uid] || st[x.o.uid].st === "open").length };
-    app().innerHTML = `<div dir="rtl" lang="ur" class="techui">
-      <div class="card" style="border:2px solid #0E5A73;background:#f2fbfe"><div class="row" style="gap:8px"><button class="btn pri grow" id="tcall" style="font-size:18px;padding:14px">📞 چیف کو کال کریں</button><button class="btn grow" id="tsend" style="font-size:18px;padding:14px">⬆ ابھی بھیجیں</button></div>
-        <p class="muted" style="margin-top:8px">کل مشاہدات: ${cnt.all} · قبول: ${cnt.ok} · انتظار: ${cnt.wait}</p></div>
-      <div class="card"><h2>نیا مشاہدہ</h2>
-        <label class="f">ٹاور نمبر</label><div class="row" style="gap:6px"><input id="tt" type="text" inputmode="numeric" list="ttl" dir="ltr" value="${esc(techDraft.tower)}" placeholder="مثلاً 145" class="grow"><button class="btn" id="tnear">قریبی ٹاور</button></div>
+    app().innerHTML = `<div class="techui">
+      <div class="card" style="border:2px solid #0E5A73;background:#f2fbfe"><div class="row" style="gap:8px"><button class="btn pri grow" id="tcall" style="font-size:18px;padding:14px">📞 Call Chief</button><button class="btn grow" id="tsend" style="font-size:18px;padding:14px">⬆ Send now</button></div>
+        <p class="muted" style="margin-top:8px">Observations: ${cnt.all} · accepted: ${cnt.ok} · waiting: ${cnt.wait}</p></div>
+      <div class="card"><h2>New general observation</h2><p class="muted">For anything not tied to a checklist point. For a checklist point, open the checklist from the home screen.</p>
+        <label class="f">Tower</label><div class="row" style="gap:6px"><input id="tt" type="text" inputmode="numeric" list="ttl" dir="ltr" value="${esc(techDraft.tower)}" placeholder="e.g. 145" class="grow"><button class="btn" id="tnear">Nearest tower</button></div>
         <datalist id="ttl">${TOWERS.map((t) => `<option value="${t.id}">`).join("")}</datalist><div id="ttinfo" class="muted" dir="ltr"></div>
-        <label class="f">حصہ</label><select id="ta"><option value="">— حصہ منتخب کریں —</option>${AREAS.map(([en, ur]) => `<option value="${esc(en)}" ${techDraft.area === en ? "selected" : ""}>${esc(ur)} – ${esc(en)}</option>`).join("")}</select>
-        <label class="f">سرکٹ / فیز (اگر معلوم ہو)</label><select id="tp" dir="ltr">${PHASES_UR.map((p) => `<option value="${p}" ${techDraft.phase === p ? "selected" : ""}>${p || "—"}</option>`).join("")}</select>
-        <label class="f">اردو میں لکھیں یا بولیں</label><textarea id="tu" dir="rtl" lang="ur" rows="4" style="font-size:18px">${esc(techDraft.ur)}</textarea>
-        <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn" id="tspk">🎤 بول کر لکھیں</button><button class="btn" id="tvn">${techRec ? "⏹ روکیں" : "🎙️ وائس نوٹ"}</button><button class="btn" id="tph">📷 تصویر</button></div>
-        <div id="tvst" class="muted" style="margin-top:4px">${techDraft.audio ? "🎙️ وائس نوٹ ریکارڈ ہو گیا" : ""}</div>
-        ${techDraft.audio ? `<audio controls src="${esc(techDraft.audio)}" style="width:100%;margin-top:4px"></audio><button class="btn sm" id="tvdel">وائس نوٹ ہٹائیں</button>` : ""}
+        <label class="f">Area</label><select id="ta"><option value="">— choose the area —</option>${AREAS.map(([en, ur]) => `<option value="${esc(en)}" ${techDraft.area === en ? "selected" : ""}>${esc(en)} (${esc(ur)})</option>`).join("")}</select>
+        <label class="f">Circuit / phase (if known)</label><select id="tp" dir="ltr">${PHASES_UR.map((p) => `<option value="${p}" ${techDraft.phase === p ? "selected" : ""}>${p || "—"}</option>`).join("")}</select>
+        <label class="f">Your note – type or speak in Urdu</label><textarea id="tu" dir="rtl" lang="ur" rows="4" style="font-size:18px">${esc(techDraft.ur)}</textarea>
+        <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn" id="tspk">🎤 Speak (Urdu to text)</button><button class="btn" id="tvn">${techRec ? "⏹ Stop" : "🎙️ Voice note"}</button><button class="btn" id="tph">📷 Photo</button></div>
+        <div id="tvst" class="muted" style="margin-top:4px">${techDraft.audio ? "🎙️ Voice note recorded" : ""}</div>
+        ${techDraft.audio ? `<audio controls src="${esc(techDraft.audio)}" style="width:100%;margin-top:4px"></audio><button class="btn sm" id="tvdel">Remove voice note</button>` : ""}
         <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">${techDraft.photos.map((p, i) => `<div style="width:31%;position:relative"><img src="${esc(p.thumb)}" style="width:100%;border-radius:6px"><button class="btn sm" data-tpd="${i}" style="position:absolute;top:2px;left:2px">✕</button></div>`).join("")}</div>
-        <p class="muted">ہوا میں فون کو منہ کے قریب رکھیں اور ہاتھ سے ڈھانپیں۔ زیادہ سے زیادہ 3 تصاویر۔</p>
-        <button class="btn pri" id="tsave" style="width:100%;font-size:18px;padding:14px;margin-top:8px">محفوظ کریں اور بھیجیں</button></div>
-      <div class="card"><h2>میرے بھیجے گئے مشاہدات</h2>${mine.length ? mine.slice(0, 60).map((x) => `<div style="border-bottom:1px solid #eee;padding:6px 0"><b dir="ltr">${esc(x.r.structure)}</b> · ${esc(x.o.areaUr || x.o.area)}${x.o.phase ? ' · <span dir="ltr">' + esc(x.o.phase) + "</span>" : ""}<div>${esc(x.o.ur || (x.o.audio ? "🎙️ وائس نوٹ" : ""))}</div><div class="muted" dir="ltr">${esc(OMT(x.o.time).slice(0, 16))}</div>${stTxt(x)}</div>`).join("") : '<p class="muted">ابھی کوئی مشاہدہ نہیں</p>'}</div>
-      <p class="ver" dir="ltr">Version ${APP_VERSION} · ${esc(me.name)} – Field Technician</p></div>`;
+        <p class="muted">In wind, hold the phone close to your mouth and shield it with your hand. Up to 3 photos.</p>
+        <button class="btn pri" id="tsave" style="width:100%;font-size:18px;padding:14px;margin-top:8px">Save and send</button></div>
+      <div class="card"><h2>My general observations</h2>${mine.length ? mine.slice(0, 60).map((x) => `<div style="border-bottom:1px solid #eee;padding:6px 0"><b dir="ltr">${esc(x.r.structure)}</b> · ${esc(x.o.areaUr || x.o.area)}${x.o.phase ? ' · <span dir="ltr">' + esc(x.o.phase) + "</span>" : ""}<div>${esc(x.o.ur || (x.o.audio ? "🎙️ voice note" : ""))}</div><div class="muted" dir="ltr">${esc(OMT(x.o.time).slice(0, 16))}</div>${stTxt(x)}</div>`).join("") : '<p class="muted">None yet.</p>'}</div>
+      <p class="ver">Version ${APP_VERSION} · ${esc(me.name)} – Field Technician</p></div>`;
     const keep = () => { techDraft.tower = $("#tt").value; techDraft.area = $("#ta").value; techDraft.phase = $("#tp").value; techDraft.ur = $("#tu").value; };
     const norm = (v) => { v = (v || "").trim().toUpperCase().replace(/\s+/g, ""); if (/^(G-?0|G-?1)$/.test(v)) return "G-0"; if (/^(G-?RM|G-?2)$/.test(v)) return "G-RM"; if (/^\d+$/.test(v)) return "T" + v.padStart(3, "0"); return v; };
     const info = () => { const t = TW[norm($("#tt").value)]; $("#ttinfo").textContent = t ? t.id + " – " + t.typeText + (towerDist(t) != null ? " · " + towerDist(t) + " m" : "") : ""; };
     $("#tt").oninput = () => { keep(); info(); }; info();
     ["#ta", "#tp", "#tu"].forEach((s) => ($(s).oninput = $(s).onchange = keep));
     $("#tcall").onclick = () => callChief(false);
-    $("#tsend").onclick = () => { if (!navigator.onLine) return toast("سگنل نہیں – بعد میں خود بھیج دیا جائے گا"); syncNow(true); };
-    $("#tnear").onclick = () => { if (!fix) return toast("GPS ابھی نہیں ملا – باہر کچھ دیر انتظار کریں"); let b = null; TOWERS.forEach((t) => { if (t.group === "G") return; const d = towerDist(t); if (d != null && (b == null || d < b.d)) b = { t, d }; }); if (b) { $("#tt").value = b.t.id; keep(); info(); } };
+    $("#tsend").onclick = () => { if (!navigator.onLine) return toast("No signal – it will be sent by itself later"); syncNow(true); };
+    $("#tnear").onclick = () => { if (!fix) return toast("No GPS fix yet – wait a moment outdoors"); let b = null; TOWERS.forEach((t) => { if (t.group === "G") return; const d = towerDist(t); if (d != null && (b == null || d < b.d)) b = { t, d }; }); if (b) { $("#tt").value = b.t.id; keep(); info(); } };
     $("#tspk").onclick = () => {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) return toast("اس فون پر بول کر لکھنا دستیاب نہیں – کی بورڈ کا مائیک استعمال کریں");
-      if (techSpeech) { try { techSpeech.stop(); } catch (e) {} techSpeech = null; $("#tspk").textContent = "🎤 بول کر لکھیں"; return; }
+      if (!SR) return toast("Speech to text is not available on this phone – use the keyboard microphone");
+      if (techSpeech) { try { techSpeech.stop(); } catch (e) {} techSpeech = null; $("#tspk").textContent = "🎤 Speak (Urdu to text)"; return; }
       const r = new SR(); r.lang = "ur-PK"; r.continuous = true; r.interimResults = false;
       r.onresult = (e) => { let t = ""; for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) t += e.results[i][0].transcript + " "; if (t) { $("#tu").value = ($("#tu").value + " " + t).trim(); keep(); } };
-      r.onend = () => { techSpeech = null; const b = $("#tspk"); if (b) b.textContent = "🎤 بول کر لکھیں"; };
-      r.onerror = (e) => toast("بولنے میں مسئلہ: " + (e.error || ""));
-      techSpeech = r; r.start(); $("#tspk").textContent = "⏹ روکیں";
+      r.onend = () => { techSpeech = null; const b = $("#tspk"); if (b) b.textContent = "🎤 Speak (Urdu to text)"; };
+      r.onerror = (e) => toast("Speech problem: " + (e.error || ""));
+      techSpeech = r; r.start(); $("#tspk").textContent = "⏹ Stop";
     };
     $("#tvn").onclick = async () => {
       if (techRec) { techRec.stop(); return; }
@@ -3963,23 +3971,23 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
         const mt = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
         const rec = new MediaRecorder(stream, mt ? { mimeType: mt, audioBitsPerSecond: 24000 } : undefined), chunks = [];
         rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
-        rec.onstop = async () => { stream.getTracks().forEach((t) => t.stop()); clearTimeout(rec._t); techRec = null; const b = new Blob(chunks, { type: (mt || "audio/webm").split(";")[0] }); techDraft.audio = await blobToData(b); keep(); techHome(); };
+        rec.onstop = async () => { stream.getTracks().forEach((t) => t.stop()); clearTimeout(rec._t); techRec = null; const b = new Blob(chunks, { type: (mt || "audio/webm").split(";")[0] }); techDraft.audio = await blobToData(b); keep(); techObsForm(); };
         rec.start(); techRec = rec; rec._t = setTimeout(() => { if (rec.state === "recording") rec.stop(); }, 60000);
-        $("#tvn").textContent = "⏹ روکیں"; $("#tvst").textContent = "🔴 ریکارڈنگ… (زیادہ سے زیادہ 60 سیکنڈ)";
-      } catch (e) { toast("مائیک کی اجازت دیں: " + e.message); }
+        $("#tvn").textContent = "⏹ Stop"; $("#tvst").textContent = "🔴 Recording… (max 60 s)";
+      } catch (e) { toast("Allow the microphone: " + e.message); }
     };
-    const dv = $("#tvdel"); if (dv) dv.onclick = () => { techDraft.audio = ""; techHome(); };
+    const dv = $("#tvdel"); if (dv) dv.onclick = () => { techDraft.audio = ""; techObsForm(); };
     $("#tph").onclick = async () => {
-      if (techDraft.photos.length >= 3) return toast("زیادہ سے زیادہ 3 تصاویر");
+      if (techDraft.photos.length >= 3) return toast("Up to 3 photos");
       keep(); const file = await inAppCamera(); if (!file) return;
-      const t = await makeThumb(file); techDraft.photos.push({ blob: file, thumb: await blobToData(t.thumb), w: t.w, h: t.h, time: new Date().toISOString(), lat: fix && fix.lat, lon: fix && fix.lon }); techHome();
+      const t = await makeThumb(file); techDraft.photos.push({ blob: file, thumb: await blobToData(t.thumb), w: t.w, h: t.h, time: new Date().toISOString(), lat: fix && fix.lat, lon: fix && fix.lon }); techObsForm();
     };
-    document.querySelectorAll("[data-tpd]").forEach((b) => (b.onclick = () => { techDraft.photos.splice(+b.dataset.tpd, 1); techHome(); }));
+    document.querySelectorAll("[data-tpd]").forEach((b) => (b.onclick = () => { techDraft.photos.splice(+b.dataset.tpd, 1); techObsForm(); }));
     $("#tsave").onclick = async () => {
       keep(); const id = norm(techDraft.tower);
-      if (!TW[id]) return toast("ٹاور نمبر لکھیں");
-      if (!techDraft.area) return toast("حصہ منتخب کریں");
-      if (!techDraft.ur.trim() && !techDraft.audio) return toast("کچھ لکھیں یا وائس نوٹ ریکارڈ کریں");
+      if (!TW[id]) return toast("Enter the tower number");
+      if (!techDraft.area) return toast("Choose the area");
+      if (!techDraft.ur.trim() && !techDraft.audio) return toast("Write a note or record a voice note");
       const recs = await kvGet("obsRecs", {}), f = id + "_OBS-" + me.id;
       const r = recs[f] || { id: f, form: "OBS-" + me.id, structure: id, round: settings.round, schema: 3, created: new Date().toISOString(), createdBy: me.id, status: "complete", header: { date: today(), team: me.name }, obs: [], photos: {}, audit: [], rev: 0, sentRev: 0 };
       const slots = [];
@@ -3992,9 +4000,146 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       r.obs.push({ uid: me.id + "-" + Date.now().toString(36), area: area[0], areaUr: area[1], phase: techDraft.phase, ur: techDraft.ur.trim(), audio: techDraft.audio || "", thumbs: techDraft.photos.map((p) => p.thumb), photos: slots, time: new Date().toISOString(), lat: fix && fix.lat, lon: fix && fix.lon });
       r.rev++; r.updated = new Date().toISOString(); r.lastUser = me.id; recs[f] = r; await kvPut("obsRecs", recs);
       techDraft = { tower: techDraft.tower, area: "", phase: "", ur: "", audio: "", photos: [] };
-      toast("محفوظ ہو گیا – سگنل آنے پر خود بھیج دیا جائے گا", 3500); queueSync(); techHome();
+      toast("Saved – it is sent by itself when there is signal", 3500); queueSync(); techObsForm();
     };
   }
+
+  /* ============================== v1.9.0 (Chief 25-Nov-2026) ==============================
+   * Field Technician: English screens; opens any checklist in PROPOSAL MODE (his own copy, folder …-P-<id>).
+   * Every point he marks, with Urdu note (typed, spoken or voice note) and photos, goes to the TEAM LEADER first:
+   * accept, accept with amendments, or reject with a reason. Only the team leader's confirmed version goes in.
+   * One master: the E&I Engineer's push at the end of the turn; phones follow it and the round can be locked.
+   * ======================================================================================= */
+  const roundLocked = (p) => !!(config && config.lock && config.lock.round === ((p && p.round) || settings.round));
+  /** Phones follow the master: a record the E&I Engineer pushed with a newer revision replaces this phone's copy. */
+  let following = false;
+  async function followMaster() {
+    if (following || !config || !config.master || !navigator.onLine || !settings.endpoint) return;
+    const u = me && me.secret ? me : Object.values(people).find((x) => x.secret); if (!u) return;
+    following = true; let n = 0;
+    try {
+      for (const p of await dbAll("insp")) {
+        const k = folderOf(p), m = config.master[k];
+        if (!m || (m.rev || 0) <= (p.rev || 0) || (p.sentRev || 0) < (p.rev || 0) || p.proposal) continue;
+        try {
+          const j = await post({ action: "fetch", user: u.id, auth: u.secret, round: p.round, folder: k });
+          if (!j.ok || !j.pkg) continue;
+          const q = j.pkg; delete q.received; delete q.heldBy;
+          q.id = p.id; q.sentRev = q.rev; q.sentAt = new Date().toISOString(); q.followed = { at: q.sentAt, master: m.at };
+          await dbPut("insp", q); n++;
+        } catch (e) { /* inbox without fetch yet – try again later */ break; }
+      }
+    } finally { following = false; }
+    if (n) { toast(n + " record(s) updated to the master copy", 3500); if (view === "home") home(); }
+  }
+  /* ---------- Field Technician: proposal records ---------- */
+  function propPanel() {
+    if (!cur || !cur.proposal) return;
+    const host = app(); if (!host || document.getElementById("propPanel")) return;
+    const def = DEFS[cur.form] || {};
+    const pts = (def.items || []).concat(def.legs || [], def.phases || []).map((d) => [d.id, d.name]);
+    const notes = cur.notes || {};
+    host.insertAdjacentHTML("afterbegin", `<div class="card" id="propPanel" style="border:2px solid #6a1b9a;background:#f7f0fb;margin:12px"><b>Proposal mode</b> – your marks, notes and photos go to the team leader. Nothing goes into the inspector's checklist until the team leader accepts it.
+      <details style="margin-top:8px"><summary><b>🎤 Urdu note on a point</b> (${Object.keys(notes).length} saved)</summary>
+        <label class="f">Point</label><select id="pnPt">${pts.length ? pts.map(([i, n]) => `<option value="${esc(i)}">${esc(i + " " + n)}</option>`).join("") : '<option value="Row">Row</option>'}</select>
+        <label class="f">Note in Urdu (type, or tap Speak)</label><textarea id="pnUr" dir="rtl" lang="ur" rows="3" style="font-size:18px"></textarea>
+        <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn" id="pnSpk">🎤 Speak (Urdu to text)</button><button class="btn" id="pnVn">🎙️ Voice note</button><button class="btn pri" id="pnSave">Save note</button></div>
+        <div id="pnSt" class="muted"></div><div id="pnList">${Object.entries(notes).map(([k, n]) => `<div class="muted">• ${esc(k)}: <span dir="rtl">${esc(n.ur || "")}</span>${n.audio ? " 🎙️" : ""}</div>`).join("")}</div>
+      </details></div>`);
+    let audio = "", rec = null, sr = null;
+    const pt = $("#pnPt"), ur = $("#pnUr");
+    const load = () => { const n = (cur.notes || {})[pt.value] || {}; ur.value = n.ur || ""; audio = n.audio || ""; $("#pnSt").textContent = audio ? "🎙️ voice note saved for this point" : ""; };
+    pt.onchange = load; load();
+    $("#pnSpk").onclick = () => {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return toast("Speech to text is not available – use the keyboard microphone");
+      if (sr) { try { sr.stop(); } catch (e) {} sr = null; $("#pnSpk").textContent = "🎤 Speak (Urdu to text)"; return; }
+      sr = new SR(); sr.lang = "ur-PK"; sr.continuous = true; sr.interimResults = false;
+      sr.onresult = (e) => { let t = ""; for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) t += e.results[i][0].transcript + " "; if (t) ur.value = (ur.value + " " + t).trim(); };
+      sr.onend = () => { sr = null; const b = $("#pnSpk"); if (b) b.textContent = "🎤 Speak (Urdu to text)"; };
+      sr.start(); $("#pnSpk").textContent = "⏹ Stop";
+    };
+    $("#pnVn").onclick = async () => {
+      if (rec) { rec.stop(); return; }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true, channelCount: 1 } });
+        const mt = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+        const r = new MediaRecorder(stream, mt ? { mimeType: mt, audioBitsPerSecond: 24000 } : undefined), ch = [];
+        r.ondataavailable = (e) => e.data && e.data.size && ch.push(e.data);
+        r.onstop = async () => { stream.getTracks().forEach((t) => t.stop()); clearTimeout(r._t); rec = null; audio = await blobToData(new Blob(ch, { type: (mt || "audio/webm").split(";")[0] })); $("#pnVn").textContent = "🎙️ Voice note"; $("#pnSt").textContent = "🎙️ voice note recorded – press Save note"; };
+        r.start(); rec = r; r._t = setTimeout(() => { if (r.state === "recording") r.stop(); }, 60000); $("#pnVn").textContent = "⏹ Stop"; $("#pnSt").textContent = "🔴 Recording… (max 60 s)";
+      } catch (e) { toast("Allow the microphone: " + e.message); }
+    };
+    $("#pnSave").onclick = () => {
+      if (!ur.value.trim() && !audio) return toast("Write or speak a note, or record a voice note");
+      cur.notes = cur.notes || {}; cur.notes[pt.value] = { ur: ur.value.trim(), audio, time: new Date().toISOString() };
+      save(true); toast("Note saved on " + pt.value + " – goes to the team leader"); const pp = $("#propPanel"); if (pp) pp.remove(); propPanel();
+    };
+  }
+  async function techStart(form, id) {
+    const all = await dbAll("insp");
+    const dup = all.find((p) => p.proposal && p.structure === id && p.form === form && p.round === settings.round);
+    if (dup) return openInsp(dup.id);
+    const p = stampNew(isLog(form) ? await newLogRow(form, id) : isGen(form) ? newGeneric(form, id) : newInspection(form, id), "");
+    p.proposal = true; p.header = p.header || {}; p.header.team = me.name;
+    await dbPut("insp", p); openInsp(p.id);
+  }
+  function techCard(all) {
+    const st = (config && config.propStatus) || {}, mine = new Set(all.filter((p) => p.proposal).map((p) => folderOf(p)));
+    const L = Object.entries(st).filter(([u]) => mine.has(u.split("|")[0]));
+    const c = { open: 0, accepted: 0, amended: 0, rejected: 0 }; L.forEach(([u, x]) => (c[x.st] = (c[x.st] || 0) + 1));
+    const rej = L.filter(([u, x]) => x.st === "rejected").slice(0, 10);
+    return `<div class="card" style="border:2px solid #6a1b9a"><h2>Field Technician – ${esc(me.name)}</h2>
+      <p>Open any checklist below: your marks, notes and photos are <b>proposals</b> for the team leader.</p>
+      <p class="muted">Waiting for the team leader <b>${c.open}</b> · accepted <b>${c.accepted}</b> · accepted with changes <b>${c.amended}</b> · rejected <b>${c.rejected}</b></p>
+      ${rej.length ? "<p><b>Rejected – reasons:</b></p>" + rej.map(([u, x]) => `<div class="muted">• ${esc(u.split("|")[0].split("_")[0] + " " + u.split("|")[2])}: ${esc(x.reason)}</div>`).join("") : ""}
+      <button class="btn" id="techObs" style="margin-top:8px">📝 General observation (not on a checklist point)</button></div>`;
+  }
+  /* ---------- team leader: review the Field Technician's proposals ---------- */
+  const ANS = ["Y", "N", "NA", "NV", "✓", "✗"];
+  async function propReviewCard() {
+    if (!me || !isLead()) return "";
+    const dec = await kvGet("prdDec", {}), list = ((config && config.proposals) || []).filter((o) => !dec[o.uid]);
+    if (!list.length) return "";
+    return `<div class="card" style="border:2px solid #6a1b9a"><h2>Field Technician proposals to review (${list.length})</h2><div class="list">${list.map((o) => `<div class="it" data-prop="${esc(o.uid)}"><div class="t">${esc(o.tower)}</div><div class="grow"><b>${esc(o.form + " · " + o.key + (o.cell ? " " + o.cell : "") + " " + (o.name || ""))}</b><div class="muted">${esc(propTxt(o.val))}${o.en ? " – " + esc(o.en) : o.ur ? " – Urdu note" : ""}${(o.thumbs || []).length ? " · 📷" + o.thumbs.length : ""} · ${esc(o.byName || o.by)}</div></div></div>`).join("")}</div></div>`;
+  }
+  const propTxt = (v) => (v ? [v.r, v.sev ? "Sev " + v.sev : "", v.desc || v.rem || ""].filter(Boolean).join(", ") : "");
+  async function propView(uid) {
+    const o = ((config && config.proposals) || []).find((x) => x.uid === uid);
+    if (!o) return toast("This proposal is already decided.");
+    if (!isLead()) return toast("Only the team leader decides on Field Technician proposals.");
+    view = "prop"; $("#back").classList.remove("hide"); $("#back").onclick = () => home();
+    $("#title").textContent = "Proposal · " + o.tower;
+    const v = o.val || {}, c = o.cur || {};
+    app().innerHTML = `<div class="card"><h2>${esc(o.tower)} ${esc(o.form)} – ${esc(o.key + (o.cell ? " " + o.cell : ""))} ${esc(o.name || "")}</h2>
+      <p class="muted">Proposed by ${esc(o.byName || o.by)} · ${esc(o.time ? OMT(o.time).slice(0, 16) : "")}</p>
+      <table class="log" style="width:100%"><tr><th></th><th>Checklist now</th><th>Proposed</th></tr>
+        <tr><td>Answer</td><td>${esc(c.r || "–")}</td><td><b>${esc(v.r || "–")}</b></td></tr>
+        <tr><td>Severity</td><td>${esc(c.sev || "–")}</td><td><b>${esc(v.sev || "–")}</b></td></tr>
+        <tr><td>Description</td><td>${esc(c.rem || "–")}</td><td><b>${esc(v.desc || v.rem || "–")}</b></td></tr></table>
+      ${o.en ? `<p><b>English:</b> ${esc(o.en)}</p>` : ""}${o.ur ? `<p dir="rtl" lang="ur" style="font-size:18px">${esc(o.ur)}</p>` : ""}
+      ${o.audio ? `<audio controls src="${esc(o.audio)}" style="width:100%"></audio>` : ""}
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px">${(o.thumbs || []).map((t) => `<img src="${esc(t)}" style="width:31%;border-radius:6px">`).join("")}</div>
+      <h3 style="margin-top:12px">Your decision</h3>
+      <label class="f">Answer</label><select id="pdR">${ANS.map((a) => `<option ${a === v.r ? "selected" : ""}>${a}</option>`).join("")}</select>
+      <label class="f">Severity</label><select id="pdS">${["", "1", "2", "3"].map((a) => `<option value="${a}" ${String(v.sev || "") === a ? "selected" : ""}>${a || "–"}</option>`).join("")}</select>
+      <label class="f">Description (technical, in English)</label><textarea id="pdD" rows="3">${esc(v.desc || v.rem || o.en || "")}</textarea>
+      <label class="f">Reason, if you reject it</label><input id="pdW" type="text" placeholder="e.g. Not visible from the ground – checked, no defect">
+      <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"><button class="btn pri grow" id="pdA">✔ Accept as proposed</button><button class="btn grow" id="pdM">✎ Accept with my changes</button><button class="btn warn grow" id="pdX">✘ Reject</button></div>
+      <p class="muted">Accepted points go into the checklist at the office with the photos; the inspector sees them after the master sync.</p></div>`;
+    const decide = async (d) => {
+      const reason = $("#pdW").value.trim();
+      if (d === "rejected" && !reason) return toast("Write why it is rejected.");
+      const val = d === "amended" ? { r: $("#pdR").value, sev: $("#pdS").value, desc: $("#pdD").value.trim() } : null;
+      if (d === "amended" && !val.desc && /N|✗/.test(val.r)) return toast("Write the description of the defect.");
+      const dec = await kvGet("prdDec", {}); dec[uid] = { d, val, reason, by: me.id, time: new Date().toISOString(), tower: o.tower }; await kvPut("prdDec", dec);
+      const recs = await kvGet("prdRecs", {}), f = o.tower + "_PRD-" + me.id;
+      const r = recs[f] || { id: f, form: "PRD-" + me.id, structure: o.tower, round: settings.round, schema: 3, created: new Date().toISOString(), createdBy: me.id, status: "complete", decisions: {}, audit: [], photos: {}, rev: 0, sentRev: 0 };
+      r.decisions[uid] = dec[uid]; r.rev++; r.updated = new Date().toISOString(); r.lastUser = me.id; recs[f] = r; await kvPut("prdRecs", recs);
+      toast(d === "rejected" ? "Rejected – saved" : "Accepted – saved"); queueSync(); home();
+    };
+    $("#pdA").onclick = () => decide("accepted"); $("#pdM").onclick = () => decide("amended"); $("#pdX").onclick = () => decide("rejected");
+  }
+  document.addEventListener("click", (ev) => { const g = ev.target.closest && ev.target.closest("[data-prop]"); if (g) { ev.preventDefault(); propView(g.dataset.prop); } });
 
   /* ------------------------------ config from the office ------------------------------ */
   let config = null;
@@ -4009,7 +4154,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
       if (!j.ok && refused({ message: j.error })) return withdrawn(u.id, u.name + ": " + j.error);
       clockFrom(j.time);
       if (j.person && people[j.person.id]) { const pp = people[j.person.id]; if (pp.name !== j.person.name || pp.role !== j.person.role) { pp.name = j.person.name; pp.role = j.person.role; savePeople(); } }
-      if (j.ok && j.config) { config = j.config; await dbPut("kv", config, "config"); applyConfig(); }
+      if (j.ok && j.config) { config = j.config; await dbPut("kv", config, "config"); applyConfig(); followMaster().catch(() => {}); }
     } catch (e) { /* offline – keep the cached copy */ }
   }
   function applyConfig() {
