@@ -237,6 +237,7 @@ input.camno{margin-top:6px;min-height:38px;font-size:14px;padding:6px 9px}
 .qaflag{outline:3px solid #c62828;outline-offset:2px;border-radius:8px}
 .qalock{opacity:.45;pointer-events:none}
 .qalockall input,.qalockall select,.qalockall textarea,.qalockall .chk,.qalockall .seg{pointer-events:none;opacity:.55}
+.qprop{background:#F1F7F9;border-left:4px solid #0E5A73;border-radius:6px;padding:8px;margin-top:8px}.qpv{font-weight:600;margin-top:2px}.qdone{margin-top:8px;color:#1E6B3A;font-weight:600}.qform{margin-top:8px;border-top:1px dashed #ccc;padding-top:8px}.qform textarea,.qform select{width:100%;font-size:16px}.qbar{height:10px;background:#eee;border-radius:5px;margin-top:6px;overflow:hidden}.qbar i{display:block;height:100%;background:#2e7d32}
 .techui .btn{font-size:16px}.techui label.f{font-size:16px}
 </style></head>
 <body>
@@ -2172,7 +2173,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   const isGen = (form) => !!(DEFS[form] && DEFS[form].generic);
   const TOWERS = (window.MF_TOWERS || []).slice();
     const TW = Object.fromEntries(TOWERS.map((t) => [t.id, t]));
-  const APP_VERSION = "1.9.3";
+  const APP_VERSION = "1.9.4";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   /** Oman time (UTC+4, no daylight saving) as "YYYY-MM-DD HH:MM:SS", whatever the device clock zone. */
@@ -3755,6 +3756,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   function reviewBanner(p) {
     const r = reviewOf(p); if (!r || r.status !== "returned" || (p.sentAt && p.sentAt > r.time)) return "";
     const qa = /QA rule check/i.test(r.by || "");
+    if (qa && qacOn()) return "";
     if (qa && (r.points || []).length) return `<div class="card" style="border:2px solid #c62828;background:#fff4f2"><h2 style="color:#c62828">QA check – ${r.points.length} point(s) to correct</h2>${pointCards(r)}<p class="muted" style="margin-top:8px">${esc(r.time ? OMT(r.time).slice(0, 16) : "")}. Correct each point, then press "Tower complete – send" again. The check runs again by itself.</p></div>`;
     return `<div class="card" style="border:2px solid #c62828;background:#fff4f2"><h2 style="color:#c62828">${qa ? "QA check – points to correct" : "Returned by " + esc(r.by || "the E&I Engineer")}</h2><p>${esc(r.note)}</p><p class="muted">${esc(r.time ? OMT(r.time).slice(0, 16) : "")}. Correct it, then press "Tower complete – send" again.</p></div>`;
   }
@@ -3778,7 +3780,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   async function kvPut(k, v) { await dbPut("kv", v, k); }
 
   /* ---------- QA points: cards, go to point, highlight ---------- */
-  function qaPointsOf(p) { const r = reviewOf(p); if (!r || r.status !== "returned" || (p.sentAt && p.sentAt > r.time)) return []; return r.points || []; }
+  function qaPointsOf(p) { if (qacOn()) return []; const r = reviewOf(p); if (!r || r.status !== "returned" || (p.sentAt && p.sentAt > r.time)) return []; return r.points || []; }
   function pointCards(r) {
     const nth = (n) => n === 2 ? "2nd return" : n === 3 ? "3rd return" : n > 3 ? n + "th return" : "";
     return (r.points || []).map((x) => `<div class="qacard"><div class="row" style="align-items:flex-start;gap:8px"><b class="qan">${x.n}</b><div class="grow">
@@ -3825,6 +3827,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
 
   /* ---------- home: points to correct, progress, team leader, observations ---------- */
   async function toCorrectCard(all) {
+    if (qacOn()) return "";
     const R = (config && config.reviews) || {}, local = Object.fromEntries(all.map((p) => [p.structure + "_" + Core.formCode(p.form), p]));
     const mine = [], team = [];
     Object.entries(R).forEach(([k, r]) => {
@@ -3852,7 +3855,7 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   }
   async function bindHomeQA(all) {
     const box = document.getElementById("qaHome"); if (!box) return;
-    box.innerHTML = (isTech() ? techCard(all) : (await toCorrectCard(all))) + (await propReviewCard()) + (await obsReviewCard());
+    box.innerHTML = (isTech() ? techCard(all) : (await qacCard()) + (await toCorrectCard(all))) + (await propReviewCard()) + (await obsReviewCard());
     const to = document.getElementById("techObs"); if (to) to.onclick = () => techObsForm();
     box.querySelectorAll("[data-ck]").forEach((el) => (el.onclick = async () => {
       const k = el.dataset.ck, a2 = await dbAll("insp"), p = a2.find((x) => x.structure + "_" + Core.formCode(x.form) === k);
@@ -3897,12 +3900,12 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
   /* ---------- sending observations and decisions (called from syncNow) ---------- */
   async function extrasPending() {
     let n = 0;
-    for (const store of ["obsRecs", "obrRecs", "prdRecs"]) { const recs = await kvGet(store, {}); for (const r of Object.values(recs)) { if ((r.sentRev || 0) < (r.rev || 0)) n++; for (const k of Object.keys(r.photos || {})) { const x = await dbGet("photos", r.id + "/" + k); if (x && !x.uploaded) n++; } } }
+    for (const store of ["obsRecs", "obrRecs", "prdRecs", "qacRecs"]) { const recs = await kvGet(store, {}); for (const r of Object.values(recs)) { if ((r.sentRev || 0) < (r.rev || 0)) n++; for (const k of Object.keys(r.photos || {})) { const x = await dbGet("photos", r.id + "/" + k); if (x && !x.uploaded) n++; } } }
     return n;
   }
   async function sendExtras(sendPhoto) {
     let sent = 0;
-    for (const store of ["obsRecs", "obrRecs", "prdRecs"]) {
+    for (const store of ["obsRecs", "obrRecs", "prdRecs", "qacRecs"]) {
       const recs = await kvGet(store, {});
       for (const f of Object.keys(recs)) {
         const r = recs[f], who = people[r.createdBy] && people[r.createdBy].secret ? people[r.createdBy] : null; if (!who) continue;
@@ -4185,6 +4188,101 @@ MsgBox n & " PDF file(s) made under " & here, 64, "MF-DPC-132"
     if (leftIds(a).includes(id)) return true;
     return confirm(id + " – " + a.title + " is already COMPLETE on the office record (whole team).\n\nStart it again only if the team leader asked you to.\n\nOK = start anyway, Cancel = stop");
   }
+
+
+  /* ============================== v1.9.4 (Chief 28-Nov-2026) ==============================
+   * QA checklist: one list per inspector with every open QA point, the proposed correction and Y / N.
+   * Y = the proposed text is right. N = type the right answer (or the reason) – photo where asked.
+   * Answers go to the office as form QAC-<id>; the office engine writes them into the checklists,
+   * runs the QA check again and issues the next list until every point is closed.
+   * While a QA checklist is live the old fix cards are switched off – one list only.
+   * ======================================================================================= */
+  const qacOn = () => !!(config && config.qaList && config.qaList.active);
+  const qacMine = () => (qacOn() ? (config.qaList.items || []).filter((x) => x.user === (me && me.id)) : []);
+  async function qacAnswers() { const recs = await kvGet("qacRecs", {}); const f = "QA_QAC-" + (me && me.id); return (recs[f] && recs[f].answers) || {}; }
+  const qacStat = (id) => ((config && config.qaStat) || {})[id] || "";
+  let qacTower = "", qacOpen = "";
+  async function qacCard() {
+    if (!me || isTech() || !qacOn()) return "";
+    const L = qacMine(), ans = await qacAnswers();
+    const done = L.filter((x) => ans[x.id] || qacStat(x.id) === "closed").length;
+    const all = config.qaList.items || [], tdone = all.filter((x) => qacStat(x.id) === "closed" || qacStat(x.id) === "answered").length;
+    const pct = (a, b) => (b ? Math.round((a * 100) / b) : 100);
+    return `<div class="card" style="border:2px solid #c62828"><h2 style="color:#c62828">QA checklist ${esc(config.qaList.name || "")}</h2>
+      ${L.length ? `<div class="muted">Your points: <b>${done}</b> of <b>${L.length}</b> answered</div><div class="qbar"><i style="width:${pct(done, L.length)}%"></i></div>
+      <button class="btn pri" id="qacGo" style="margin-top:8px;width:100%">${done < L.length ? "Open my QA checklist – " + (L.length - done) + " to answer" : "Open my QA checklist ✅ all answered"}</button>`
+      : '<div class="muted">No QA points for you in this list ✅</div>'}
+      ${isLead() ? `<div class="muted" style="margin-top:6px">Team: <b>${tdone}</b> of <b>${all.length}</b> answered or closed (${pct(tdone, all.length)} %)</div>` : ""}</div>`;
+  }
+  function qacGroups(L) { const g = {}; L.forEach((x) => (g[x.tower] = g[x.tower] || []).push(x)); return Object.entries(g).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })); }
+  async function qacView() {
+    view = "qac"; cur = null; $("#back").classList.remove("hide"); $("#back").onclick = () => (qacTower ? ((qacTower = ""), qacView()) : home());
+    const L = qacMine(), ans = await qacAnswers();
+    $("#title").textContent = "QA checklist " + (config.qaList.name || "");
+    if (!qacTower) {
+      app().innerHTML = `<div class="card"><h2>My QA points by tower</h2><p class="muted">Open a tower and answer each point. <b>Y</b> = the proposed text is right. <b>N</b> = type the right answer. It is sent by itself when there is signal.</p>
+        <div class="list">${qacGroups(L).map(([t, xs]) => { const d = xs.filter((x) => ans[x.id] || qacStat(x.id) === "closed").length; return `<div class="it" data-qt="${esc(t)}"><div class="t">${esc(t)}</div><div class="grow"><b>${xs.length} point(s)</b><div class="muted">${[...new Set(xs.map((x) => x.form))].join(", ")}</div></div><span class="pill ${d === xs.length ? "ok" : "s1"}">${d}/${xs.length}</span></div>`; }).join("")}</div></div>`;
+      document.querySelectorAll("[data-qt]").forEach((el) => (el.onclick = () => { qacTower = el.dataset.qt; qacView(); }));
+      return;
+    }
+    const xs = L.filter((x) => x.tower === qacTower);
+    app().innerHTML = `<div class="card"><h2>${esc(qacTower)} – ${xs.length} QA point(s)</h2></div>` + xs.map((x, i) => {
+      const a = ans[x.id], st = qacStat(x.id);
+      const head = `<div class="row" style="align-items:flex-start;gap:8px"><b class="qan">${i + 1}</b><div class="grow"><div class="muted">${esc(x.form)} · point ${esc(x.point)}${x.rule ? " · " + esc(x.rule) : ""}</div><div class="qaw">${esc(x.issue)}</div></div></div>`;
+      const prop = `<div class="qprop"><div class="muted">${esc(x.ask || "Proposed")}</div><div class="qpv">${esc(x.proposed)}</div></div>`;
+      const done = a ? `<div class="qdone">${a.a === "Y" ? "✔ Y – proposed text accepted" : "✘ N – " + esc([a.v, a.why].filter(Boolean).join(" – "))}${a.photo ? " · 📷 photo attached" : ""} <button class="btn sm" data-qedit="${esc(x.id)}">Change</button></div>` : st === "closed" ? '<div class="qdone">✔ Closed by the office</div>' : "";
+      const open = !a && st !== "closed";
+      const form = open && qacOpen === x.id ? qacForm(x) : open ? `<div class="row" style="gap:8px;margin-top:8px"><button class="btn pri grow" data-qy="${esc(x.id)}">${x.noprop ? "✎ Type the answer" : x.kind === "confirm" ? "✔ Done" : x.kind === "photo" ? "📷 Attach photo" : "✔ Y – correct"}</button>${x.noprop ? "" : `<button class="btn warn grow" data-qn="${esc(x.id)}">${x.kind === "confirm" || x.kind === "photo" ? "✘ Not possible" : "✘ N – not correct"}</button>`}</div>` : "";
+      return `<div class="qacard" id="q_${esc(x.id)}">${head}${prop}${done}${form}</div>`;
+    }).join("") + `<div style="padding:12px"><button class="btn grow" id="qback" style="width:100%">◀ All my towers</button></div>`;
+    $("#qback").onclick = () => { qacTower = ""; qacView(); };
+    document.querySelectorAll("[data-qy]").forEach((b) => (b.onclick = async () => { const x = xs.find((y) => y.id === b.dataset.qy); if (x.noprop) { qacOpen = x.id; qacPhotoY = false; return qacView(); } if (x.kind === "photo") { qacOpen = x.id; qacPhotoY = true; return qacView(); } await qacSave(x, { a: "Y" }); }));
+    document.querySelectorAll("[data-qn]").forEach((b) => (b.onclick = () => { qacOpen = b.dataset.qn; qacPhotoY = false; qacView(); setTimeout(() => { const e = document.getElementById("q_" + qacOpen); if (e) e.scrollIntoView({ block: "center" }); }, 80); }));
+    document.querySelectorAll("[data-qedit]").forEach((b) => (b.onclick = async () => { const recs = await kvGet("qacRecs", {}), f = "QA_QAC-" + me.id; if (recs[f]) { delete recs[f].answers[b.dataset.qedit]; recs[f].rev++; await kvPut("qacRecs", recs); } qacOpen = b.dataset.qedit; qacView(); }));
+    const pane = document.getElementById("q_" + qacOpen); if (pane) qacBind(xs.find((y) => y.id === qacOpen));
+  }
+  let qacPhotoY = false, qacPhoto = null;
+  function qacForm(x) {
+    const sel = (x.opts || []).length ? `<select id="qv"><option value="">– choose –</option>${x.opts.map((o) => `<option>${esc(o)}</option>`).join("")}</select>` : "";
+    const txt = `<textarea id="qtx" rows="3" placeholder="${esc(x.hint || "Type the right text")}"></textarea>`;
+    const ph = x.kind === "photo" || x.photo ? `<div class="row" style="gap:6px;margin-top:6px"><button class="btn sm" id="qcam">📷 Take photo</button><button class="btn sm" id="qgal">🖼 From gallery</button><span id="qphs" class="muted">${qacPhoto ? "Photo ready ✔" : x.kind === "photo" && qacPhotoY ? "Photo needed" : "Photo if you have it"}</span></div>` : "";
+    const lab = x.kind === "confirm" ? "Why it cannot be done" : x.kind === "photo" ? (qacPhotoY ? "Attach the photo for this point" : "Why is there no photo?") : x.kind === "answer" || x.kind === "sev" || x.kind === "pick" ? "Choose the right answer" + (x.kind === "answer" ? " and write the reason for NA / NV / N" : "") : "Type the right " + (x.kind === "value" ? "value" : "text");
+    return `<div class="qform"><label class="f">${esc(lab)}</label>${x.kind === "photo" ? "" : sel}${x.kind === "photo" && qacPhotoY ? "" : x.kind === "sev" || x.kind === "pick" ? "" : txt}${ph}
+      <div class="row" style="gap:8px;margin-top:8px"><button class="btn pri grow" id="qok">Save</button><button class="btn grow" id="qcx">Cancel</button></div></div>`;
+  }
+  function qacBind(x) {
+    const shot = async (src) => { const file = await (src === "gallery" ? pickImage(false) : inAppCamera()); if (!file) return; const t = await makeThumb(file); qacPhoto = { blob: file, thumb: t.thumb, w: t.w, h: t.h, time: new Date().toISOString() }; const s = $("#qphs"); if (s) s.textContent = "Photo ready ✔"; };
+    const c = $("#qcam"); if (c) c.onclick = () => shot("camera");
+    const g = $("#qgal"); if (g) g.onclick = () => shot("gallery");
+    $("#qcx").onclick = () => { qacOpen = ""; qacPhoto = null; qacView(); };
+    $("#qok").onclick = async () => {
+      const v = ($("#qv") && $("#qv").value) || "", t = (($("#qtx") && $("#qtx").value) || "").trim();
+      if (x.kind === "photo") {
+        if (qacPhotoY && !qacPhoto) return toast("Attach the photo first");
+        if (!qacPhotoY && !t) return toast("Write why there is no photo");
+        return qacSave(x, qacPhotoY ? { a: "Y" } : { a: "N", why: t });
+      }
+      if (x.kind === "confirm") { if (t.length < 5) return toast("Write why"); return qacSave(x, { a: "N", why: t }); }
+      if ((x.opts || []).length && !v) return toast("Choose the answer first");
+      if (x.kind === "answer" && /^(N|NA|NV)$/.test(v) && t.length < 5) return toast("Write the reason / defect description");
+      if (!(x.opts || []).length && t.length < (x.kind === "value" ? 1 : 5)) return toast("Type the right " + (x.kind === "value" ? "value" : "text"));
+      if (x.kind === "value" && x.num && !/^(OL|\d+(\.\d+)?)$/i.test(t.replace(/\s*Ω$/, ""))) return toast("Type the number only, e.g. 4.25 – or OL");
+      await qacSave(x, { a: "N", v: (x.opts || []).length ? v : t.replace(/\s*Ω$/, ""), why: (x.opts || []).length ? t : "" });
+    };
+  }
+  async function qacSave(x, a) {
+    const recs = await kvGet("qacRecs", {}), f = "QA_QAC-" + me.id;
+    const r = recs[f] || { id: f, form: "QAC-" + me.id, structure: "QA", round: settings.round, schema: 3, created: new Date().toISOString(), createdBy: me.id, status: "complete", list: config.qaList.name || "", answers: {}, photos: {}, audit: [], rev: 0, sentRev: 0 };
+    a.time = new Date().toISOString(); a.tower = x.tower; a.point = x.point; a.list = config.qaList.name || "";
+    if (qacPhoto) {
+      let n = 1; while (r.photos["Q" + String(n).padStart(3, "0")]) n++; const slot = "Q" + String(n).padStart(3, "0");
+      r.photos[slot] = { file: Core.photoName(x.tower, slot), w: qacPhoto.w, h: qacPhoto.h, time: qacPhoto.time, by: me.id, caption: x.tower + " " + x.point + " – QA checklist photo", qa: x.id };
+      await dbPut("photos", { orig: qacPhoto.blob, thumb: qacPhoto.thumb }, f + "/" + slot); a.photo = slot;
+    }
+    r.answers[x.id] = a; r.rev++; r.updated = new Date().toISOString(); r.lastUser = me.id; recs[f] = r; await kvPut("qacRecs", recs);
+    qacOpen = ""; qacPhoto = null; toast("Saved – sent by itself when there is signal"); queueSync(); qacView();
+  }
+  document.addEventListener("click", (ev) => { const b = ev.target.closest && ev.target.closest("#qacGo"); if (b) { ev.preventDefault(); qacTower = ""; qacView(); } });
 
   /* ------------------------------ config from the office ------------------------------ */
   let config = null;
